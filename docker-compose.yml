@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  bestia-catalogs:
+    build: .
+    container_name: bestia-catalogs
+    ports:
+      - "7171:7171"
+    environment:
+      - PORT=7171
+      - ADDON_URL=http://localhost:7171
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
+    restart: unless-stopped
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./data:/app/data
+
+  redis:
+    image: redis:alpine
+    container_name: bestia-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

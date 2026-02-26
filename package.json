@@ -1,0 +1,22 @@
+{
+  "name": "nuvio-catalogs",
+  "version": "1.0.0",
+  "description": "Catalogs for Nuvio",
+  "main": "index.js",
+  "scripts": {
+    "prestart": "npm install",
+    "start": "node addon.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "esbuild": "^0.27.3"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "node-fetch": "^2.7.0",
+    "redis": "^5.11.0",
+    "stremio-addon-sdk": "^1.6.10"
+  }
+}
