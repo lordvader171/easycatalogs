@@ -48,8 +48,6 @@ async function getImdbRating(imdbId, type) {
     }
 }
 
-const EASY_RATINGS_BASE_URL = (process.env.EASY_RATINGS_BASE_URL || "https://erdb.stremio.dpdns.org").replace(/\/+$/, "");
-
 function normalizeImdbId(imdbId) {
     if (!imdbId) return null;
     const imdbStr = String(imdbId).trim();
@@ -210,14 +208,6 @@ function usesKitsuAnimeIds(catalogId) {
 
 function getConfiguredAssetUrl(config, assetType, imdbId, tmdbId, mediaIdOverride = null) {
     if (!config || typeof config !== "object") return null;
-
-    const easyRatingsToken = typeof config.easyRatingsToken === "string"
-        ? config.easyRatingsToken.trim()
-        : "";
-    if (easyRatingsToken) {
-        const mediaId = mediaIdOverride || getPrimaryMediaId(imdbId, tmdbId);
-        return `${EASY_RATINGS_BASE_URL}/${easyRatingsToken}/${assetType}/${mediaId}.jpg`;
-    }
 
     if (assetType !== "poster") return null;
 
@@ -579,6 +569,9 @@ function normalizeKitsuId(value) {
 const STREAMING_PROVIDER_TYPES = ["flatrate", "ads", "free"];
 const PROVIDER_NAME_ALIASES = {
     "NOW": "Sky Go / NOW",
+    "NOW TV": "Sky Go / NOW",
+    "Now TV": "Sky Go / NOW",
+    "Sky": "Sky Go / NOW",
     "Sky Go": "Sky Go / NOW"
 };
 
@@ -673,7 +666,13 @@ function getRegionStreamingProviderIds(providersData, region) {
 
 function isExclusiveToProvider(providersData, region, providerId) {
     const providerIds = getRegionStreamingProviderIds(providersData, region);
-    return providerIds.length === 1 && providerIds[0] === String(providerId);
+    const allowedProviderIds = String(providerId || "")
+        .split("|")
+        .map(value => value.trim())
+        .filter(Boolean);
+    if (providerIds.length === 0 || allowedProviderIds.length === 0) return false;
+    if (providerIds.length === 1) return allowedProviderIds.includes(providerIds[0]);
+    return providerIds.every(id => allowedProviderIds.includes(id));
 }
 
 function replaceWatchRegion(queryParams, region) {
@@ -695,39 +694,53 @@ function replaceProviderQueryRegion(queryParams, region) {
 }
 
 async function fetchTmdbPagedResults(endpoint, queryParams, options = {}) {
-    const startPage = Number.isInteger(options.startPage) ? options.startPage : 1;
-    const maxPages = Number.isInteger(options.maxPages) ? options.maxPages : 3;
-    const minItems = Number.isInteger(options.minItems) ? options.minItems : 20;
+    const startPage = Number.isInteger(options.startPage) && options.startPage > 0 ? options.startPage : 1;
+    const maxPages = Number.isInteger(options.maxPages) && options.maxPages > 0 ? options.maxPages : null;
+    const minItems = Number.isInteger(options.minItems) && options.minItems > 0 ? options.minItems : null;
     const itemFilter = typeof options.itemFilter === "function" ? options.itemFilter : null;
-
-    let currentPage = startPage;
-    let pagesLeft = maxPages;
     const items = [];
+    let page = startPage;
+    let totalPages = null;
+    let pagesFetched = 0;
 
-    while (items.length < minItems && pagesLeft > 0) {
-        const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${currentPage}`;
-        console.log(`[Easy Catalogs] Fetching Page ${currentPage}: ${currentUrl}`);
+    while (true) {
+        const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
+        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
             const data = await response.json();
             const rawResults = Array.isArray(data && data.results) ? data.results : [];
+            if (Number.isFinite(data && data.total_pages)) {
+                totalPages = data.total_pages;
+            }
 
             if (rawResults.length === 0) {
                 break;
             }
 
             const filteredResults = itemFilter
-                ? await itemFilter(rawResults, currentPage)
+                ? await itemFilter(rawResults, page)
                 : rawResults;
-            items.push(...filteredResults);
+            if (Array.isArray(filteredResults) && filteredResults.length > 0) {
+                items.push(...filteredResults);
+            }
         } catch (error) {
-            console.error(`[Easy Catalogs] Fetch Error on page ${currentPage}:`, error);
+            console.error(`[Easy Catalogs] Fetch Error on page ${page}:`, error);
             break;
         }
 
-        currentPage++;
-        pagesLeft--;
+        pagesFetched += 1;
+
+        const reachedMinItems = minItems && items.length >= minItems;
+        const reachedMaxPages = maxPages && pagesFetched >= maxPages;
+        const reachedTotalPages = totalPages && page >= totalPages;
+
+        if (reachedMinItems || reachedMaxPages || reachedTotalPages) {
+            break;
+        }
+
+        page += 1;
     }
 
     return items;
@@ -771,7 +784,6 @@ async function fetchProviderOriginalMergedResults({
     const genreId = getGenreIdForTmdbType(tmdbType, extra.genre);
     const today = new Date().toISOString().split("T")[0];
     const targetCount = skip + 20;
-    const pageBudget = Math.max(4, Math.ceil(targetCount / 20) + 2);
     const providerRegions = getProviderRegions(canonicalProviderName);
 
     for (const region of providerRegions) {
@@ -787,7 +799,6 @@ async function fetchProviderOriginalMergedResults({
         const originalQueryParams = `${baseQueryParams}&${originalFilterName}=${originalSourceId}${sharedProviderParams}`;
 
         const originalItems = await fetchTmdbPagedResults(endpoint, originalQueryParams, {
-            maxPages: pageBudget,
             minItems: targetCount,
             itemFilter: async rawResults => filterCatalogItems(rawResults, id, allowFuture)
         });
@@ -795,7 +806,6 @@ async function fetchProviderOriginalMergedResults({
 
         const exclusiveQueryParams = `${baseQueryParams}${sharedProviderParams}`;
         const exclusiveItems = await fetchTmdbPagedResults(endpoint, exclusiveQueryParams, {
-            maxPages: Math.max(pageBudget, 6),
             minItems: targetCount,
             itemFilter: async rawResults => {
                 const filteredItems = filterCatalogItems(rawResults, id, allowFuture);
@@ -846,31 +856,44 @@ async function fetchCatalogMetasForQuery({
     allowFuture,
     providerRegion = null,
     startPage = 1,
-    maxPagesToFetch = 3
+    maxPages = null,
+    pageOffset = 0
 }) {
-    let metas = [];
-    let fetchedPage = startPage;
-    let pagesLeft = maxPagesToFetch;
+    const skipRegionCheck = (id === "tmdb.movie.anime" || id === "tmdb.series.anime");
+    const preferKitsuId = usesKitsuAnimeIds(id);
+    let seriesAvailabilityRegion = null;
+    if (tmdbType === "tv" && !id.includes("anime")) {
+        seriesAvailabilityRegion = providerRegion || "IT";
+    }
+    const metas = [];
+    let page = Number.isInteger(startPage) && startPage > 0 ? startPage : 1;
+    let totalPages = null;
+    let pagesFetched = 0;
+    let remainingOffset = Number.isInteger(pageOffset) && pageOffset > 0 ? pageOffset : 0;
 
-    while (metas.length < 20 && pagesLeft > 0) {
-        const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${fetchedPage}`;
-        console.log(`[Easy Catalogs] Fetching Page ${fetchedPage}: ${currentUrl}`);
+    while (true) {
+        const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
+        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
             const data = await response.json();
+            const rawResults = Array.isArray(data && data.results) ? data.results : [];
+            if (Number.isFinite(data && data.total_pages)) {
+                totalPages = data.total_pages;
+            }
 
-            if (!data.results || data.results.length === 0) break;
-            const filteredResults = filterCatalogItems(data.results, id, allowFuture);
+            if (rawResults.length === 0) {
+                break;
+            }
 
+            let filteredResults = filterCatalogItems(rawResults, id, allowFuture);
+            if (remainingOffset > 0 && filteredResults.length > 0) {
+                filteredResults = filteredResults.slice(remainingOffset);
+                remainingOffset = 0;
+            }
             if (filteredResults.length > 0) {
-                const skipRegionCheck = (id === "tmdb.movie.anime" || id === "tmdb.series.anime");
-                const preferKitsuId = usesKitsuAnimeIds(id);
-                let seriesAvailabilityRegion = null;
-                if (tmdbType === "tv" && !id.includes("anime")) {
-                    seriesAvailabilityRegion = providerRegion || "IT";
-                }
-                const newMetas = await enrichAndMapItems(
+                const mapped = await enrichAndMapItems(
                     filteredResults,
                     type,
                     tmdbType,
@@ -880,18 +903,24 @@ async function fetchCatalogMetasForQuery({
                     seriesAvailabilityRegion,
                     preferKitsuId
                 );
-                metas = metas.concat(newMetas);
+                metas.push(...mapped);
             }
-
-            fetchedPage++;
-            pagesLeft--;
         } catch (error) {
-            console.error(`[Easy Catalogs] Fetch Error on page ${fetchedPage}:`, error);
+            console.error(`[Easy Catalogs] Fetch Error on page ${page}:`, error);
             break;
         }
+
+        pagesFetched += 1;
+        const reachedMaxPages = Number.isInteger(maxPages) && maxPages > 0 && pagesFetched >= maxPages;
+        const reachedTotalPages = totalPages && page >= totalPages;
+        if (metas.length >= 20 || reachedMaxPages || reachedTotalPages) {
+            break;
+        }
+
+        page += 1;
     }
 
-    return metas;
+    return metas.slice(0, 20);
 }
 
 function uniqueNonEmptyStrings(values) {
@@ -2671,7 +2700,11 @@ async function buildKitsuMetaForPayload(kitsuId, payload, requestedType, config 
     meta.poster = configuredPosterUrl || preferredPoster.poster || meta.poster;
     if (configuredBackdropUrl) meta.background = configuredBackdropUrl;
     if (configuredLogoUrl) meta.logo = configuredLogoUrl;
-    if (preferredSeasonDetails && preferredSeasonDetails.overview) {
+    const kitsuSynopsis = attributes.synopsis || attributes.description || "";
+    if (!meta.description && kitsuSynopsis) {
+        meta.description = kitsuSynopsis;
+    }
+    if (!meta.description && preferredSeasonDetails && preferredSeasonDetails.overview) {
         meta.description = preferredSeasonDetails.overview;
     }
     meta.links = Array.isArray(meta.links) ? [...meta.links] : [];
@@ -2923,8 +2956,7 @@ async function fetchKitsuCatalogMetas(catalogId, requestedType, extra = {}, conf
         allowedSubtypes: allowedSubtypes.join(","),
         excludeFutureStartDates,
         tmdbApiKey: resolvedConfig.tmdbApiKey || "",
-        topStreamingKey: resolvedConfig.topStreamingKey || "",
-        easyRatingsToken: resolvedConfig.easyRatingsToken || ""
+        topStreamingKey: resolvedConfig.topStreamingKey || ""
     })}`;
     const cached = await cache.get(cacheKey);
     if (isNegativeCache(cached)) return [];
@@ -3102,10 +3134,16 @@ Object.entries(MOVIE_GENRES).forEach(([name, id]) => GENRE_ID_TO_NAME[id] = name
 Object.entries(TV_GENRES).forEach(([name, id]) => GENRE_ID_TO_NAME[id] = name);
 
 const PROVIDERS = {
-    "Netflix": 8, "Amazon Prime Video": 119, "Disney+": 337,
-    "HBO Max": 1899,
-    "Apple TV+": 350, "Paramount+": 531, "Sky Go / NOW": "39|29",
-    "Rai Play": 222, "Mediaset Infinity": "359|110", "Timvision": 109,
+    "Netflix": 8,
+    "Amazon Prime Video": "9|119",
+    "Disney+": "337|390",
+    "HBO Max": "384|1899",
+    "Apple TV+": 350,
+    "Paramount+": "531|2303|2304",
+    "Sky Go / NOW": "29|39",
+    "Rai Play": 222,
+    "Mediaset Infinity": "359|110",
+    "Timvision": 109,
     "Rakuten TV": 35
 };
 
@@ -3990,7 +4028,8 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
         // Handle Pagination
         // TMDB uses pages (1, 2, 3...), Stremio uses skip (0, 20, 40...)
         // We assume 20 items per page.
-        const page = extra && extra.skip ? Math.floor(extra.skip / 20) + 1 : 1;
+        const skip = resolvedExtra && resolvedExtra.skip ? Number(resolvedExtra.skip) || 0 : 0;
+        const page = skip ? Math.floor(skip / 20) + 1 : 1;
         queryParams += `&page=${page}`;
 
         // Filter by Region IT for movies to exclude unreleased content in Italy
@@ -4236,28 +4275,34 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
 
         let metas = [];
         let fetchedPage = (extra && extra.skip ? Math.floor(extra.skip / 20) + 1 : 1);
-        let maxPagesToFetch = 3; // Limit to prevent excessive API calls
-        
         // Remove existing page param if present to handle it in loop
         queryParams = queryParams.replace(/&page=\d+/g, '');
 
         if (shouldMergeProviderExclusives) {
             const skip = resolvedExtra && resolvedExtra.skip ? Number(resolvedExtra.skip) || 0 : 0;
-            const mergedResults = await fetchProviderOriginalMergedResults({
-                id,
-                tmdbType,
-                providerName: providerFromId,
-                extra: resolvedExtra,
-                config,
-                allowFuture,
-                skip
-            });
+            let providerOffset = skip;
+            let mergedAttempted = false;
 
-            if (mergedResults) {
+            while (metas.length < 20) {
+                const mergedResults = await fetchProviderOriginalMergedResults({
+                    id,
+                    tmdbType,
+                    providerName: providerFromId,
+                    extra: resolvedExtra,
+                    config,
+                    allowFuture,
+                    skip: providerOffset
+                });
+
+                if (!mergedResults || mergedResults.items.length === 0) {
+                    break;
+                }
+
+                mergedAttempted = true;
                 const skipRegionCheck = false;
                 const preferKitsuId = usesKitsuAnimeIds(id);
                 const seriesAvailabilityRegion = tmdbType === "tv" ? mergedResults.region : null;
-                metas = await enrichAndMapItems(
+                const mapped = await enrichAndMapItems(
                     mergedResults.items,
                     type,
                     tmdbType,
@@ -4268,10 +4313,23 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                     preferKitsuId
                 );
 
-                return { metas };
+                if (mapped.length > 0) {
+                    metas.push(...mapped);
+                }
+
+                if (mergedResults.items.length < 20) {
+                    break;
+                }
+
+                providerOffset += mergedResults.items.length;
+            }
+
+            if (mergedAttempted) {
+                return { metas: metas.slice(0, 20) };
             }
         }
 
+        const pageOffset = skip && skip > 0 ? skip % 20 : 0;
         metas = await fetchCatalogMetasForQuery({
             endpoint,
             queryParams,
@@ -4282,7 +4340,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
             allowFuture,
             providerRegion,
             startPage: fetchedPage,
-            maxPagesToFetch
+            pageOffset
         });
 
         if (metas.length === 0 && providerFromId) {
@@ -4298,7 +4356,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                     allowFuture,
                     providerRegion: fallbackRegion,
                     startPage: fetchedPage,
-                    maxPagesToFetch
+                    pageOffset
                 });
 
                 if (metas.length > 0) {
@@ -4336,33 +4394,6 @@ app.get('/configure', (req, res) => {
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'configure.html'));
-});
-
-app.get('/api/verify-erdb-token/:token', async (req, res) => {
-    const token = typeof req.params.token === 'string' ? req.params.token.trim() : '';
-    if (!token) {
-        return res.status(400).json({ error: 'Missing token' });
-    }
-
-    try {
-        const response = await fetch(`${EASY_RATINGS_BASE_URL}/verify-token/${encodeURIComponent(token)}`, {
-            headers: {
-                Accept: 'application/json'
-            }
-        });
-        const rawBody = await response.text();
-        let payload = {};
-
-        try {
-            payload = rawBody ? JSON.parse(rawBody) : {};
-        } catch (error) {
-            payload = rawBody ? { error: rawBody } : {};
-        }
-
-        res.status(response.status).json(payload);
-    } catch (error) {
-        res.status(502).json({ error: 'Verification unavailable' });
-    }
 });
 
 app.use(express.static('public'));
@@ -4552,12 +4583,14 @@ app.get('/manifest.json', (req, res) => {
 
     // Deduplicate just in case
     filteredCatalogs = [...new Set(filteredCatalogs)];
-    filteredCatalogs.sort((a, b) => {
-        const top10Priority = Number(isTop10Catalog(b)) - Number(isTop10Catalog(a));
-        if (top10Priority !== 0) return top10Priority;
+    if (!config.catalogs) {
+        filteredCatalogs.sort((a, b) => {
+            const top10Priority = Number(isTop10Catalog(b)) - Number(isTop10Catalog(a));
+            if (top10Priority !== 0) return top10Priority;
 
-        return Number(isSearchCatalog(a)) - Number(isSearchCatalog(b));
-    });
+            return Number(isSearchCatalog(a)) - Number(isSearchCatalog(b));
+        });
+    }
 
     const manifest = { ...addonInterface.manifest };
     manifest.catalogs = filteredCatalogs;

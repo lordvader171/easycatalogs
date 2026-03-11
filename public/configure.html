@@ -1368,7 +1368,7 @@
                     <span class="setup-nav-index">02</span>
                     <span class="setup-nav-copy">
                         <span class="setup-nav-title">Integrazioni</span>
-                        <span class="setup-nav-subtitle">Chiavi API, ERDB e opzioni generali dell'addon.</span>
+                        <span class="setup-nav-subtitle">Chiavi API e opzioni generali dell'addon.</span>
                     </span>
                 </button>
                 <button class="setup-nav-btn" type="button" data-step="selection" role="tab" aria-selected="false" aria-controls="setup-step-selection">
@@ -1426,7 +1426,7 @@
                                     <span class="intro-flow-index">02</span>
                                     <div class="intro-flow-copy">
                                         <strong>Integrazioni</strong>
-                                        <p>Imposta TMDB, poster personalizzati, ERDB e le opzioni globali del link configurato.</p>
+                                        <p>Imposta TMDB, poster personalizzati e le opzioni globali del link configurato.</p>
                                     </div>
                                 </div>
                                 <div class="intro-flow-item">
@@ -1481,17 +1481,9 @@
                                 <label for="topStreamingKey">Top Poster API Key</label>
                                 <input type="text" id="topStreamingKey" placeholder="Incolla la tua chiave qui...">
                                 <div class="input-hint">
-                                    Necessaria per poster e thumbnail personalizzati. 
+                                    Necessaria per poster personalizzati.
                                     <a href="https://api.top-streaming.stream" target="_blank">Richiedi su api.top-streaming.stream</a>
                                 </div>
-                            </div>
-                            <div class="input-group" style="margin-top: 1rem;">
-                                <label for="easyRatingsToken">Easy Ratings Database Token</label>
-                                <input type="text" id="easyRatingsToken" placeholder="Incolla il tuo token ERDB qui...">
-                                <div class="input-hint">
-                                    Abilita poster, logo, backdrop e thumbnail personalizzati. Se impostato, ha priorita su Top Poster.
-                                </div>
-                                <div id="easyRatingsTokenStatus" class="input-status" aria-live="polite"></div>
                             </div>
                             <div class="input-group" style="margin-top: 1rem;">
                                 <div class="feature-toggle-row">
@@ -1791,99 +1783,6 @@
         });
 
         const DRAG_ICON = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="12" r="1"/><circle cx="9" cy="5" r="1"/><circle cx="9" cy="19" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="15" cy="5" r="1"/><circle cx="15" cy="19" r="1"/></svg>`;
-        const ERDB_VERIFY_BASE_URL = "/api/verify-erdb-token";
-        const easyRatingsTokenInput = document.getElementById("easyRatingsToken");
-        const easyRatingsTokenStatus = document.getElementById("easyRatingsTokenStatus");
-        const easyRatingsTokenValidationState = {
-            timer: null,
-            requestId: 0
-        };
-
-        function setEasyRatingsTokenStatus(state = "", message = "") {
-            easyRatingsTokenStatus.className = "input-status";
-            easyRatingsTokenStatus.textContent = "";
-            easyRatingsTokenInput.classList.remove("is-invalid");
-
-            if (!state || !message) return;
-
-            easyRatingsTokenStatus.classList.add("visible", state);
-            easyRatingsTokenStatus.textContent = message;
-
-            if (state === "error") {
-                easyRatingsTokenInput.classList.add("is-invalid");
-            }
-        }
-
-        async function verifyEasyRatingsToken(token, options = {}) {
-            const normalizedToken = typeof token === "string" ? token.trim() : "";
-            const currentRequestId = ++easyRatingsTokenValidationState.requestId;
-
-            if (!normalizedToken) {
-                setEasyRatingsTokenStatus();
-                return true;
-            }
-
-            if (!options.silent) {
-                setEasyRatingsTokenStatus("pending", "Verifica token ERDB in corso...");
-            }
-
-            try {
-                const response = await fetch(`${ERDB_VERIFY_BASE_URL}/${encodeURIComponent(normalizedToken)}`, {
-                    headers: {
-                        Accept: "application/json"
-                    },
-                    cache: "no-store"
-                });
-                const rawBody = await response.text();
-                let payload = {};
-
-                try {
-                    payload = rawBody ? JSON.parse(rawBody) : {};
-                } catch (error) {
-                    payload = rawBody ? { error: rawBody } : {};
-                }
-
-                if (currentRequestId !== easyRatingsTokenValidationState.requestId) return null;
-
-                const errorMessage = payload && typeof payload.error === "string" ? payload.error : "";
-                if (
-                    response.status === 401 ||
-                    response.status === 403 ||
-                    /Invalid or expired API Key/i.test(errorMessage)
-                ) {
-                    setEasyRatingsTokenStatus("error", "Token ERDB non valido o scaduto.");
-                    return false;
-                }
-
-                setEasyRatingsTokenStatus();
-                return true;
-            } catch (error) {
-                if (currentRequestId !== easyRatingsTokenValidationState.requestId) return null;
-                setEasyRatingsTokenStatus();
-                return null;
-            }
-        }
-
-        function scheduleEasyRatingsTokenVerification(options = {}) {
-            const normalizedToken = easyRatingsTokenInput.value.trim();
-            clearTimeout(easyRatingsTokenValidationState.timer);
-
-            if (!normalizedToken) {
-                easyRatingsTokenValidationState.requestId += 1;
-                setEasyRatingsTokenStatus();
-                return;
-            }
-
-            if (options.immediate) {
-                verifyEasyRatingsToken(normalizedToken, options);
-                return;
-            }
-
-            easyRatingsTokenValidationState.timer = setTimeout(() => {
-                verifyEasyRatingsToken(normalizedToken, options);
-            }, 450);
-        }
-
         function utf8ToBase64(value) {
             const bytes = new TextEncoder().encode(String(value || ""));
             let binary = "";
@@ -1898,7 +1797,6 @@
             const bytes = Uint8Array.from(binary, char => char.charCodeAt(0));
             return new TextDecoder().decode(bytes);
         }
-
         function encodeConfigSegment(config) {
             const json = JSON.stringify(config || {});
             return utf8ToBase64(json)
@@ -2511,10 +2409,6 @@
                 document.getElementById("topStreamingKey").value = resolvedConfig.topStreamingKey;
             }
 
-            if (typeof resolvedConfig.easyRatingsToken === "string") {
-                document.getElementById("easyRatingsToken").value = resolvedConfig.easyRatingsToken;
-            }
-
             if (typeof resolvedConfig.catalogs !== "string" || !resolvedConfig.catalogs.trim()) return;
 
             ALL_CATALOGS.forEach(catalog => {
@@ -2931,12 +2825,10 @@
             const config = {};
             const tmdbApiKey = document.getElementById("tmdbApiKey").value.trim();
             const topPosterKey = document.getElementById("topStreamingKey").value.trim();
-            const easyRatingsToken = document.getElementById("easyRatingsToken").value.trim();
             const returnStreams = document.getElementById("returnStreams").checked;
 
             if (tmdbApiKey) config.tmdbApiKey = tmdbApiKey;
             if (topPosterKey) config.topStreamingKey = topPosterKey;
-            if (easyRatingsToken) config.easyRatingsToken = easyRatingsToken;
             if (!returnStreams) config.returnStreams = false;
             config.animeCatalogSource = selectedAnimeSource;
             if (Object.keys(catalogCustomNames).length > 0) {
@@ -3052,16 +2944,7 @@
             setAnimeCatalogsActive(false);
         });
 
-        easyRatingsTokenInput.addEventListener("input", () => {
-            scheduleEasyRatingsTokenVerification();
-        });
-
-        easyRatingsTokenInput.addEventListener("blur", () => {
-            scheduleEasyRatingsTokenVerification({ immediate: true });
-        });
-
         applyInitialConfiguration(decodeConfigFromPath());
-        scheduleEasyRatingsTokenVerification({ immediate: true, silent: true });
         renderCatalogList("standard");
         renderCatalogList("top10");
         renderCatalogList("anime");
