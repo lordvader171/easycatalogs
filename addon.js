@@ -767,11 +767,14 @@ async function enrichAndMapItems(results, stremioType, tmdbType, config = null, 
         if (configuredLogoUrl) logoUrl = configuredLogoUrl;
 
         const metaId = kitsuId ? `kitsu:${kitsuId}` : (imdbId || `tmdb:${item.id}`);
+        const preferredName = preferKitsuId
+            ? (item.title || item.name || (details ? (details.title || details.name) : null))
+            : getPreferredTmdbTitle(details || item, stremioType);
 
         return {
             id: metaId,
             type: stremioType,
-            name: item.title || item.name,
+            name: preferredName || item.title || item.name,
             poster: posterUrl,
             background: backgroundUrl,
             textBackdrop: textBackdrop || undefined,
@@ -972,6 +975,36 @@ function getTmdbApiKey(config = null) {
         : "";
     const isValidFormat = /^[a-f0-9]{32}$/i.test(customKey);
     return (isValidFormat ? customKey : "") || DEFAULT_TMDB_API_KEY;
+}
+
+function getTmdbTranslationTitle(entry, isMovie) {
+    if (!entry || typeof entry !== "object") return null;
+    const data = entry.data && typeof entry.data === "object" ? entry.data : null;
+    const value = isMovie ? (data && data.title) : (data && data.name);
+    const trimmed = String(value || "").trim();
+    return trimmed || null;
+}
+
+function getPreferredTmdbTitle(item, type) {
+    const isMovie = type === "movie";
+    const translations = item && item.translations && Array.isArray(item.translations.translations)
+        ? item.translations.translations
+        : [];
+
+    const italian = translations.find(entry => entry && entry.iso_639_1 === "it" && getTmdbTranslationTitle(entry, isMovie));
+    const english = translations.find(entry => entry && entry.iso_639_1 === "en" && getTmdbTranslationTitle(entry, isMovie));
+    const firstAvailable = translations.find(entry => getTmdbTranslationTitle(entry, isMovie));
+    const localized = item ? (isMovie ? item.title : item.name) : null;
+    const original = item ? (isMovie ? item.original_title : item.original_name) : null;
+
+    return (
+        getTmdbTranslationTitle(italian, isMovie) ||
+        getTmdbTranslationTitle(english, isMovie) ||
+        localized ||
+        getTmdbTranslationTitle(firstAvailable, isMovie) ||
+        original ||
+        null
+    );
 }
 
 function normalizeKitsuId(value) {
@@ -2671,7 +2704,7 @@ async function fetchTmdbDetails(typePath, tmdbId, config = null) {
     if (isNegativeCache(details)) return null;
 
     if (!details) {
-        const detailsUrl = `${BASE_URL}/${typePath}/${tmdbId}?api_key=${getTmdbApiKey(resolvedConfig)}&language=it-IT&append_to_response=external_ids,credits,similar,videos,images,release_dates&include_image_language=it,en,null&include_video_language=it,en,null`;
+        const detailsUrl = `${BASE_URL}/${typePath}/${tmdbId}?api_key=${getTmdbApiKey(resolvedConfig)}&language=it-IT&append_to_response=external_ids,credits,similar,videos,images,release_dates,translations&include_image_language=it,en,null&include_video_language=it,en,null`;
 
         try {
             const detailsRes = await fetch(detailsUrl);
@@ -4536,7 +4569,7 @@ async function transformToMeta(item, type, config = null, options = {}) {
     return {
         id: imdbId || `tmdb:${item.id}`,
         type: type,
-        name: item.title || item.name,
+        name: getPreferredTmdbTitle(item, type),
         poster: poster,
         background: background,
         logo: logo,
