@@ -3907,14 +3907,22 @@ async function fetchKitsuCatalogMetas(catalogId, requestedType, extra = {}, conf
             return [];
     }
 
-    const cacheKey = `kitsu:catalog:v18:${normalizedCatalogId}:${JSON.stringify({
+    const erdbConfigKey = typeof resolvedConfig.erdbConfig === "string"
+        ? resolvedConfig.erdbConfig.trim()
+        : "";
+    const erdbTypesKey = resolvedConfig.erdbTypes && typeof resolvedConfig.erdbTypes === "object"
+        ? resolvedConfig.erdbTypes
+        : {};
+    const cacheKey = `kitsu:catalog:v19:${normalizedCatalogId}:${JSON.stringify({
         skip,
         search,
         discover,
         allowedSubtypes: allowedSubtypes.join(","),
         excludeFutureStartDates,
         tmdbApiKey: resolvedConfig.tmdbApiKey || "",
-        topStreamingKey: resolvedConfig.topStreamingKey || ""
+        topStreamingKey: resolvedConfig.topStreamingKey || "",
+        erdbConfig: erdbConfigKey,
+        erdbTypes: erdbTypesKey
     })}`;
     const cached = await cache.get(cacheKey);
     if (isNegativeCache(cached)) return [];
