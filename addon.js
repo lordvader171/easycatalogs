@@ -3153,6 +3153,107 @@ async function fetchTmdbSeasonDetails(tmdbSeriesId, seasonNumber, config = null)
     return null;
 }
 
+async function fetchTmdbEpisodeGroups(tmdbSeriesId, config = null) {
+    const cleanSeriesId = extractTmdbNumericId(tmdbSeriesId) || String(tmdbSeriesId || "").trim();
+    if (!cleanSeriesId) return [];
+
+    const cacheKey = `tmdb:episode-groups:tv:${cleanSeriesId}`;
+    const cached = await cache.get(cacheKey);
+    if (isNegativeCache(cached)) return [];
+    if (Array.isArray(cached)) return cached;
+
+    try {
+        const response = await fetch(
+            `${BASE_URL}/tv/${cleanSeriesId}/episode_groups?api_key=${getTmdbApiKey(config)}&language=it-IT`
+        );
+        const payload = await response.json();
+        const groups = Array.isArray(payload && payload.results) ? payload.results : [];
+
+        if (response.ok && !payload.status_message) {
+            await cache.set(cacheKey, groups, withTtlJitter(CACHE_TTL_SECONDS.detailsSeries));
+            return groups;
+        }
+    } catch (error) {
+        // Fall through to negative cache below.
+    }
+
+    await cache.set(cacheKey, createNegativeCache("tmdb_episode_groups_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
+    return [];
+}
+
+async function fetchTmdbEpisodeGroupDetails(groupId, config = null) {
+    const cleanGroupId = String(groupId || "").trim();
+    if (!cleanGroupId) return null;
+
+    const cacheKey = `tmdb:episode-group:${cleanGroupId}`;
+    const cached = await cache.get(cacheKey);
+    if (isNegativeCache(cached)) return null;
+    if (cached) return cached;
+
+    try {
+        const response = await fetch(
+            `${BASE_URL}/tv/episode_group/${encodeURIComponent(cleanGroupId)}?api_key=${getTmdbApiKey(config)}&language=it-IT`
+        );
+        const payload = await response.json();
+
+        if (response.ok && payload && !payload.status_message) {
+            await cache.set(cacheKey, payload, withTtlJitter(CACHE_TTL_SECONDS.detailsSeries));
+            return payload;
+        }
+    } catch (error) {
+        // Fall through to negative cache below.
+    }
+
+    await cache.set(cacheKey, createNegativeCache("tmdb_episode_group_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
+    return null;
+}
+
+function isPreferredItalianSagaEpisodeGroup(group) {
+    const normalizedName = normalizeMatchTitle(group && group.name);
+    if (normalizedName === "italian sagas" || normalizedName === "italian saga" || normalizedName === "italian") {
+        return true;
+    }
+
+    if (normalizedName.includes("italian") && normalizedName.includes("saga")) {
+        return true;
+    }
+
+    const normalizedDescription = normalizeMatchTitle(group && group.description);
+    return normalizedDescription.includes("wiki italiana di fandom");
+}
+
+async function resolvePreferredTmdbEpisodeGroupDetails(tmdbSeriesId, config = null) {
+    const cleanSeriesId = extractTmdbNumericId(tmdbSeriesId) || String(tmdbSeriesId || "").trim();
+    if (!cleanSeriesId) return null;
+
+    const cacheKey = `tmdb:episode-group:preferred:tv:${cleanSeriesId}`;
+    const cached = await cache.get(cacheKey);
+    if (isNegativeCache(cached)) return null;
+    if (cached && cached.id) {
+        return fetchTmdbEpisodeGroupDetails(cached.id, config);
+    }
+
+    const episodeGroups = await fetchTmdbEpisodeGroups(cleanSeriesId, config);
+    const preferredGroup = episodeGroups.find(group => {
+        const normalizedName = normalizeMatchTitle(group && group.name);
+        return normalizedName === "italian sagas" || normalizedName === "italian saga" || normalizedName === "italian";
+    }) || episodeGroups.find(isPreferredItalianSagaEpisodeGroup);
+
+    if (!preferredGroup || !preferredGroup.id) {
+        await cache.set(cacheKey, createNegativeCache("tmdb_preferred_episode_group_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
+        return null;
+    }
+
+    const details = await fetchTmdbEpisodeGroupDetails(preferredGroup.id, config);
+    if (!details) {
+        await cache.set(cacheKey, createNegativeCache("tmdb_preferred_episode_group_details_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
+        return null;
+    }
+
+    await cache.set(cacheKey, { id: preferredGroup.id }, withTtlJitter(CACHE_TTL_SECONDS.detailsSeries));
+    return details;
+}
+
 async function fetchTmdbSeasonImages(tmdbSeriesId, seasonNumber, config = null) {
     const cleanSeriesId = String(tmdbSeriesId || "").trim();
     const cleanSeasonNumber = Number.parseInt(String(seasonNumber || ""), 10);
@@ -3338,6 +3439,178 @@ async function fetchTmdbDetails(typePath, tmdbId, config = null) {
     }
 
     return details;
+}
+
+function buildCinemetaEpisodeMap(cinemetaMeta) {
+    const cinemetaEpisodes = {};
+
+    if (cinemetaMeta && Array.isArray(cinemetaMeta.videos)) {
+        cinemetaMeta.videos.forEach(video => {
+            if (video && video.season && video.episode) {
+                cinemetaEpisodes[`${video.season}:${video.episode}`] = video;
+            }
+        });
+    }
+
+    return cinemetaEpisodes;
+}
+
+async function buildTmdbSeriesVideosFromStandardSeasons(item, cinemetaMeta, config = null) {
+    const resolvedConfig = getRequestConfig(config);
+    const seasons = Array.isArray(item && item.seasons) ? item.seasons : [];
+    if (seasons.length === 0) return [];
+
+    const seasonPromises = seasons.map(season => {
+        const seasonNumber = Number.parseInt(String(season && season.season_number || ""), 10);
+        const episodeCount = Number.parseInt(String(season && season.episode_count || ""), 10);
+        if (!Number.isFinite(seasonNumber)) return null;
+        if (episodeCount === 0) return null;
+        return fetchTmdbSeasonDetails(item.id, seasonNumber, config);
+    }).filter(Boolean);
+
+    const seasonsDetails = await Promise.all(seasonPromises);
+    const cinemetaEpisodes = buildCinemetaEpisodeMap(cinemetaMeta);
+    const videos = [];
+    const imdbId = item.imdb_id || (item.external_ids && item.external_ids.imdb_id);
+    const fallbackBackdrop = item.backdrop_path ? `https://image.tmdb.org/t/p/w500${item.backdrop_path}` : null;
+
+    seasonsDetails.forEach(seasonData => {
+        if (!seasonData || !Array.isArray(seasonData.episodes)) return;
+
+        const firstEpisode = seasonData.episodes[0];
+        const shouldRenumber = firstEpisode && firstEpisode.episode_number > 1 && firstEpisode.season_number > 0;
+
+        seasonData.episodes.forEach((episode, index) => {
+            const idPrefix = imdbId || `tmdb:${item.id}`;
+            let released = null;
+            if (episode.air_date) {
+                try {
+                    released = new Date(episode.air_date).toISOString();
+                } catch (error) {
+                    released = null;
+                }
+            }
+
+            const cinemetaThumb = cinemetaEpisodes[`${episode.season_number}:${episode.episode_number}`]?.thumbnail;
+            const episodeNumber = shouldRenumber ? (index + 1) : episode.episode_number;
+            const episodeMediaId = `${getPrimaryMediaId(imdbId, item.id)}:${episode.season_number}:${episodeNumber}`;
+            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId);
+            const fallbackThumbnail = episode.still_path
+                ? `https://image.tmdb.org/t/p/w500${episode.still_path}`
+                : (cinemetaThumb || fallbackBackdrop);
+
+            videos.push({
+                id: `${idPrefix}:${episode.season_number}:${episodeNumber}`,
+                title: episode.name,
+                released,
+                thumbnail: configuredThumbnailUrl || fallbackThumbnail,
+                overview: episode.overview,
+                season: episode.season_number,
+                episode: episodeNumber
+            });
+        });
+    });
+
+    videos.sort((left, right) => {
+        if (left.season !== right.season) return left.season - right.season;
+        return left.episode - right.episode;
+    });
+
+    return videos;
+}
+
+function buildTmdbSeriesVideosFromEpisodeGroup(item, episodeGroupDetails, cinemetaMeta, config = null) {
+    const groups = Array.isArray(episodeGroupDetails && episodeGroupDetails.groups)
+        ? [...episodeGroupDetails.groups]
+        : [];
+    if (groups.length === 0) return [];
+
+    const resolvedConfig = getRequestConfig(config);
+    const cinemetaEpisodes = buildCinemetaEpisodeMap(cinemetaMeta);
+    const imdbId = item.imdb_id || (item.external_ids && item.external_ids.imdb_id);
+    const idPrefix = imdbId || `tmdb:${item.id}`;
+    const fallbackBackdrop = item.backdrop_path ? `https://image.tmdb.org/t/p/w500${item.backdrop_path}` : null;
+    const sortedGroups = groups
+        .map((group, index) => ({
+            ...group,
+            __sortOrder: Number.parseInt(String(group && group.order || ""), 10),
+            __index: index
+        }))
+        .sort((left, right) => {
+            const leftOrder = Number.isFinite(left.__sortOrder) ? left.__sortOrder : left.__index;
+            const rightOrder = Number.isFinite(right.__sortOrder) ? right.__sortOrder : right.__index;
+            if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+            return left.__index - right.__index;
+        });
+
+    const videos = [];
+    sortedGroups.forEach((group, groupIndex) => {
+        const episodes = Array.isArray(group && group.episodes) ? group.episodes : [];
+        const seasonNumber = groupIndex + 1;
+        const sortedEpisodes = episodes
+            .map((episode, index) => ({
+                ...episode,
+                __sortOrder: Number.parseInt(String(episode && episode.order || ""), 10),
+                __index: index
+            }))
+            .sort((left, right) => {
+                const leftOrder = Number.isFinite(left.__sortOrder) ? left.__sortOrder : left.__index;
+                const rightOrder = Number.isFinite(right.__sortOrder) ? right.__sortOrder : right.__index;
+                if (leftOrder !== rightOrder) return leftOrder - rightOrder;
+                return left.__index - right.__index;
+            });
+
+        sortedEpisodes.forEach((episode, episodeIndex) => {
+            let released = null;
+            if (episode && episode.air_date) {
+                try {
+                    released = new Date(episode.air_date).toISOString();
+                } catch (error) {
+                    released = null;
+                }
+            }
+
+            const originalSeasonNumber = Number.parseInt(String(episode && episode.season_number || ""), 10);
+            const originalEpisodeNumber = Number.parseInt(String(episode && episode.episode_number || ""), 10);
+            const cinemetaThumb = Number.isFinite(originalSeasonNumber) && Number.isFinite(originalEpisodeNumber)
+                ? cinemetaEpisodes[`${originalSeasonNumber}:${originalEpisodeNumber}`]?.thumbnail
+                : null;
+            const episodeNumber = episodeIndex + 1;
+            const episodeMediaId = `${getPrimaryMediaId(imdbId, item.id)}:${seasonNumber}:${episodeNumber}`;
+            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId);
+            const fallbackThumbnail = episode && episode.still_path
+                ? `https://image.tmdb.org/t/p/w500${episode.still_path}`
+                : (cinemetaThumb || fallbackBackdrop);
+
+            videos.push({
+                id: `${idPrefix}:${seasonNumber}:${episodeNumber}`,
+                title: (episode && episode.name) || `Episode ${episodeNumber}`,
+                released,
+                thumbnail: configuredThumbnailUrl || fallbackThumbnail,
+                overview: episode && episode.overview ? episode.overview : undefined,
+                season: seasonNumber,
+                episode: episodeNumber
+            });
+        });
+    });
+
+    return videos;
+}
+
+async function buildTmdbSeriesVideos(item, cinemetaMeta, config = null, options = {}) {
+    const allowNormalSeasonsFallback = options.allowNormalSeasonsFallback !== false;
+    if (!item || !item.id) return [];
+
+    const preferredEpisodeGroup = await resolvePreferredTmdbEpisodeGroupDetails(item.id, config);
+    if (preferredEpisodeGroup) {
+        const groupedVideos = buildTmdbSeriesVideosFromEpisodeGroup(item, preferredEpisodeGroup, cinemetaMeta, config);
+        if (groupedVideos.length > 0) {
+            return groupedVideos;
+        }
+    }
+
+    if (!allowNormalSeasonsFallback) return [];
+    return buildTmdbSeriesVideosFromStandardSeasons(item, cinemetaMeta, config);
 }
 
 async function resolveTmdbIdFromImdb(imdbId, requestedType, config = null) {
@@ -3732,13 +4005,18 @@ async function buildMetaForTvdbSeriesId(id, config = null) {
         getConfiguredAssetUrl(resolvedConfig, "logo", imdbId, tmdbId, null, "series") ||
         logoFallback ||
         undefined;
-    const videos = await buildTvdbSeriesVideos(
-        series,
-        imdbId,
-        tmdbId,
-        (tmdbBaseMeta && (tmdbBaseMeta.background || tmdbBaseMeta.poster)) || background || poster || null,
-        config
-    );
+    const tmdbEpisodeGroupVideos = context.tmdbDetails
+        ? await buildTmdbSeriesVideos(context.tmdbDetails, null, config, { allowNormalSeasonsFallback: false })
+        : [];
+    const videos = tmdbEpisodeGroupVideos.length > 0
+        ? tmdbEpisodeGroupVideos
+        : await buildTvdbSeriesVideos(
+            series,
+            imdbId,
+            tmdbId,
+            (tmdbBaseMeta && (tmdbBaseMeta.background || tmdbBaseMeta.poster)) || background || poster || null,
+            config
+        );
 
     if (tmdbBaseMeta) {
         return {
@@ -5366,7 +5644,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
     
     const config = getRequestConfig();
     const configHash = Object.keys(config).length > 0 ? JSON.stringify(config) : "default";
-    const cacheKey = `meta_v14:${type}:${id}:${configHash}`;
+    const cacheKey = `meta_v15:${type}:${id}:${configHash}`;
     const metaTtl = type === "movie" ? CACHE_TTL_SECONDS.metaMovie : CACHE_TTL_SECONDS.metaSeries;
     
     const cached = await cache.get(cacheKey);
@@ -5570,73 +5848,7 @@ async function transformToMeta(item, type, config = null, options = {}) {
     let videos = [];
     if (includeVideos && !isMovie && item.seasons) {
         try {
-            const seasonPromises = item.seasons.map(season => {
-                 // Skip seasons with 0 episodes if likely placeholder, but keep specials (season 0) if they have content
-                 if (season.episode_count === 0) return null; 
-                 const seasonUrl = `${BASE_URL}/tv/${item.id}/season/${season.season_number}?api_key=${getTmdbApiKey(resolvedConfig)}&language=it-IT`;
-                 return fetch(seasonUrl).then(res => res.json()).catch(e => null);
-            }).filter(Boolean);
-
-            const seasonsDetails = await Promise.all(seasonPromises);
-
-            // Create a map for Cinemeta episodes for faster lookup (thumbnail fallback)
-            const cinemetaEpisodes = {};
-            if (cinemetaMeta && cinemetaMeta.videos) {
-                cinemetaMeta.videos.forEach(v => {
-                    if (v.season && v.episode) {
-                        cinemetaEpisodes[`${v.season}:${v.episode}`] = v;
-                    }
-                });
-            }
-
-            seasonsDetails.forEach(seasonData => {
-                if (seasonData && seasonData.episodes) {
-                    // Check if we need to renumber episodes (e.g. for Anime with absolute numbering)
-                    // If the first episode of a non-zero season starts with a number > 1, assume absolute numbering
-                    // and renumber visually to start from 1.
-                    const firstEp = seasonData.episodes[0];
-                    const shouldRenumber = firstEp && firstEp.episode_number > 1 && firstEp.season_number > 0;
-
-                    seasonData.episodes.forEach((ep, index) => {
-                        // ID format: imdbId:season:episode or tmdb:id:season:episode
-                        const idPrefix = imdbId || `tmdb:${item.id}`;
-                        
-                        // Handle release date
-                        let released = null;
-                        if (ep.air_date) {
-                            try {
-                                released = new Date(ep.air_date).toISOString();
-                            } catch (e) {}
-                        }
-
-                        // Check for Cinemeta thumbnail
-                        const cinemetaThumb = cinemetaEpisodes[`${ep.season_number}:${ep.episode_number}`]?.thumbnail;
-                        const episodeMediaId = `${getPrimaryMediaId(imdbId, item.id)}:${ep.season_number}:${ep.episode_number}`;
-                        const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId);
-
-                        const episodeNumber = shouldRenumber ? (index + 1) : ep.episode_number;
-                        const fallbackThumbnail = ep.still_path 
-                            ? `https://image.tmdb.org/t/p/w500${ep.still_path}` 
-                            : (cinemetaThumb || (item.backdrop_path ? `https://image.tmdb.org/t/p/w500${item.backdrop_path}` : null));
-
-                        videos.push({
-                            id: `${idPrefix}:${ep.season_number}:${episodeNumber}`,
-                            title: ep.name,
-                            released: released,
-                            thumbnail: configuredThumbnailUrl || fallbackThumbnail,
-                            overview: ep.overview,
-                            season: ep.season_number,
-                            episode: episodeNumber,
-                        });
-                    });
-                }
-            });
-            
-            // Sort videos by season and episode
-            videos.sort((a, b) => {
-                if (a.season !== b.season) return a.season - b.season;
-                return a.episode - b.episode;
-            });
+            videos = await buildTmdbSeriesVideos(item, cinemetaMeta, config);
         } catch (e) {
             console.error(`[Easy Catalogs] Error fetching episodes for ${item.id}:`, e);
         }
