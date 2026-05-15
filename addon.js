@@ -6203,7 +6203,6 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
             }
         } else if (sourceCatalogId === "tmdb.movie.now_playing") {
             endpoint = "movie/now_playing";
-            queryParams += "&region=IT";
         } else if (sourceCatalogId === "tmdb.movie.kids" || sourceCatalogId === "tmdb.series.kids") {
             if (tmdbType === "movie") {
                 endpoint = "discover/movie";
@@ -6347,10 +6346,9 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                 } else {
                     endpoint = "tv/top_rated";
                 }
-            } else if (sourceCatalogId.includes("upcoming")) {
-                if (tmdbType === "movie") {
-                    endpoint = "movie/upcoming";
-                    queryParams += "&region=IT";
+        } else if (sourceCatalogId.includes("upcoming")) {
+            if (tmdbType === "movie") {
+                endpoint = "movie/upcoming";
                 } else {
                     endpoint = "tv/on_the_air";
                 }
