@@ -2081,6 +2081,23 @@ async function fetchCatalogMetasForQuery({
             }
 
             let filteredResults = filterCatalogItems(rawResults, id, allowFuture);
+            if (id.includes("upcoming") && tmdbType === "movie" && endpoint === "movie/upcoming") {
+                filteredResults = await Promise.all(filteredResults.map(async (item) => {
+                    try {
+                        const rdUrl = `${BASE_URL}/movie/${item.id}/release_dates?api_key=${getTmdbApiKey(config)}`;
+                        const rdRes = await fetch(rdUrl);
+                        const rdData = await rdRes.json();
+                        const itData = (rdData.results || []).find(r => r.iso_3166_1 === "IT");
+                        if (itData && !itData.release_dates.some(rd => rd.type === 3)) {
+                            return null;
+                        }
+                        return item;
+                    } catch {
+                        return item;
+                    }
+                }));
+                filteredResults = filteredResults.filter(Boolean);
+            }
             if (remainingOffset > 0 && filteredResults.length > 0) {
                 filteredResults = filteredResults.slice(remainingOffset);
                 remainingOffset = 0;
