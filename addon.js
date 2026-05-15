@@ -5214,7 +5214,7 @@ const PROVIDERS = {
 
 const COMPANY_IDS = {
     "Netflix": "178464|145172", // Netflix, Netflix Animation
-    "Amazon Prime Video": "20580|21", // Amazon Studios, MGM
+    "Amazon Prime Video": "20580|21|210099", // Amazon Studios, MGM, Amazon MGM Studios
     "Disney+": "2|3|420|1|6125", // Disney, Pixar, Marvel, Lucasfilm, Disney Animation
     "Apple TV+": 194232,
     "HBO Max": "7429|174|128064|12|158691", // HBO Films, WB, DC Films, New Line, HBO Max
