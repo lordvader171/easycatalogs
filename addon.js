@@ -6,6 +6,55 @@ const fetch = require("node-fetch");
 const path = require('path');
 const cache = require('./database');
 
+const crypto = require('crypto');
+const fs = require('fs');
+
+const CONFIGS_DIR = process.env.CONFIGS_DIR || path.join(__dirname, 'configs');
+
+function ensureConfigsDir() {
+    try {
+        if (!fs.existsSync(CONFIGS_DIR)) {
+            fs.mkdirSync(CONFIGS_DIR, { recursive: true });
+        }
+    } catch (e) {
+        console.error('[Config Store] Failed to create configs directory:', e.message);
+    }
+}
+
+function hashPassword(password) {
+    return crypto.createHash('sha256').update(password, 'utf-8').digest('hex');
+}
+
+function saveConfig(config, password) {
+    ensureConfigsDir();
+    const uuid = crypto.randomUUID();
+    const filePath = path.join(CONFIGS_DIR, `${uuid}.json`);
+    const stored = { config };
+    if (password && typeof password === 'string' && password.trim()) {
+        stored.passwordHash = hashPassword(password.trim());
+    }
+    try {
+        fs.writeFileSync(filePath, JSON.stringify(stored), 'utf-8');
+        return uuid;
+    } catch (e) {
+        console.error('[Config Store] Failed to save config:', e.message);
+        return null;
+    }
+}
+
+function loadConfig(uuid) {
+    const filePath = path.join(CONFIGS_DIR, `${uuid}.json`);
+    try {
+        if (fs.existsSync(filePath)) {
+            const data = fs.readFileSync(filePath, 'utf-8');
+            return JSON.parse(data);
+        }
+    } catch (e) {
+        console.error('[Config Store] Failed to load config:', e.message);
+    }
+    return null;
+}
+
 const ADDON_URL = process.env.ADDON_URL || "http://localhost:7000";
 const CACHE_TTL_SECONDS = {
     metaMovie: 12 * 3600,  // 12 hours
@@ -6526,6 +6575,74 @@ app.get('/', (req, res) => {
 
 app.use(express.static('public'));
 
+app.use(express.json({ limit: '100kb' }));
+
+app.post('/api/config', (req, res) => {
+    const { config, password } = req.body || {};
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        return res.status(400).json({ error: 'Invalid config' });
+    }
+
+    const uuid = saveConfig(config, password);
+    if (!uuid) {
+        return res.status(500).json({ error: 'Failed to store config' });
+    }
+
+    res.json({ token: uuid, hasPassword: !!(password && typeof password === 'string' && password.trim()) });
+});
+
+app.get('/api/config/:uuid', (req, res) => {
+    const stored = loadConfig(req.params.uuid);
+    if (!stored) {
+        return res.status(404).json({ error: 'Config not found' });
+    }
+    if (stored.passwordHash) {
+        return res.status(401).json({ error: 'Password required', hasPassword: true });
+    }
+    res.json(stored.config);
+});
+
+app.put('/api/config/:uuid', (req, res) => {
+    const stored = loadConfig(req.params.uuid);
+    if (!stored) {
+        return res.status(404).json({ error: 'Config not found' });
+    }
+    const { config, password } = req.body || {};
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
+        return res.status(400).json({ error: 'Invalid config' });
+    }
+    const existingHash = stored.passwordHash;
+    const newPassword = password !== undefined ? password : undefined;
+    const newHash = newPassword !== undefined
+        ? (String(newPassword).trim() ? hashPassword(String(newPassword).trim()) : null)
+        : existingHash;
+    const filePath = path.join(CONFIGS_DIR, `${req.params.uuid}.json`);
+    try {
+        const updated = { config };
+        if (newHash) updated.passwordHash = newHash;
+        fs.writeFileSync(filePath, JSON.stringify(updated), 'utf-8');
+        res.json({ token: req.params.uuid, hasPassword: !!newHash });
+    } catch (e) {
+        console.error('[Config Store] Failed to update config:', e.message);
+        res.status(500).json({ error: 'Failed to update config' });
+    }
+});
+
+app.post('/api/config/:uuid/verify', (req, res) => {
+    const stored = loadConfig(req.params.uuid);
+    if (!stored) {
+        return res.status(404).json({ error: 'Config not found' });
+    }
+    const { password } = req.body || {};
+    if (!stored.passwordHash) {
+        return res.json(stored.config);
+    }
+    if (!password || hashPassword(String(password).trim()) !== stored.passwordHash) {
+        return res.status(401).json({ error: 'Invalid password' });
+    }
+    res.json(stored.config);
+});
+
 app.use((req, res, next) => {
     const segments = req.path.split('/').filter(Boolean);
     let config = {};
@@ -6537,8 +6654,13 @@ app.use((req, res, next) => {
                 config = decodeConfigSegment(first);
                 req.url = req.url.replace(`/${first}`, '');
                 if (req.url === '') req.url = '/';
-            } catch (e) {
-                // Not a valid config
+            } catch (_) {
+                const stored = loadConfig(first);
+                if (stored && stored.config) {
+                    config = stored.config;
+                    req.url = req.url.replace(`/${first}`, '');
+                    if (req.url === '') req.url = '/';
+                }
             }
         }
     }

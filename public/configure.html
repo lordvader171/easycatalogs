@@ -2360,9 +2360,11 @@
                             <!-- Javascript will populate this -->
                         </div>
                         <div class="step-footer">
-                            <button type="button" class="btn btn-secondary" onclick="copyUrl()">Copia Link</button>
-                            <button type="button" class="btn btn-primary" onclick="installAddon()">Installa
-                                Addon</button>
+                            <div style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                                <button type="button" id="saveConfigBtn" class="btn btn-secondary" onclick="saveConfig()" style="display: none;">Salva Config</button>
+                                <button type="button" id="copyUrlBtn" class="btn btn-secondary" onclick="copyUrl()">Copia Link</button>
+                                <button type="button" id="installAddonBtn" class="btn btn-primary" onclick="installAddon()">Installa Addon</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -2396,6 +2398,31 @@
             <div class="modal-footer">
                 <div class="modal-footer-note">Le modifiche vengono salvate nel link configurato di Easy Catalogs.</div>
                 <button type="button" class="btn btn-primary" id="save-custom-stream-addons-modal-btn">Chiudi</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="config-password-modal" aria-hidden="true">
+        <div class="modal-backdrop" data-close-config-password-modal></div>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="config-password-modal-title">
+            <div class="modal-header">
+                <div>
+                    <div class="modal-title" id="config-password-modal-title">Config protetta da password</div>
+                    <div class="modal-subtitle">Inserisci la password per modificare questa configurazione.</div>
+                </div>
+                <button type="button" class="modal-close" id="close-config-password-modal-btn"
+                    aria-label="Chiudi modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Password</label>
+                    <input type="password" id="configPasswordLogin" placeholder="Password..." style="width: 100%; padding: 0.5rem 0.7rem; border: 1px solid var(--border-color); border-radius: 6px; background: var(--input-bg, #1a1a2e); color: var(--text-primary); font-size: 0.9rem;">
+                    <div id="configPasswordLoginError" style="color: #ff4444; font-size: 0.8rem; margin-top: 0.3rem; display: none;">Password errata</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-danger" id="clear-config-password-btn">Apri senza config</button>
+                <button type="button" class="btn btn-primary" id="submit-config-password-btn">Accedi</button>
             </div>
         </div>
     </div>
@@ -2666,9 +2693,8 @@
 
             try {
                 return decodeConfigSegment(encodedConfig);
-            } catch (err) {
-                console.warn("Unable to decode config from URL path:", err);
-                return {};
+            } catch (_) {
+                return { _configToken: encodedConfig };
             }
         }
         const DEFAULT_ERDB_BASE_URL = 'https://easyratingsdb.com';
@@ -4632,30 +4658,81 @@
             return config;
         }
 
-        function getStremioUrl() {
+        function setButtonsLoading(loading) {
+            const btns = ["copyUrlBtn", "installAddonBtn", "saveConfigBtn"];
+            btns.forEach(id => {
+                const btn = document.getElementById(id);
+                if (btn) btn.disabled = loading;
+            });
+        }
+
+        function getConfigPassword() {
+            return _currentConfigPassword || "";
+        }
+
+        async function doSaveConfig(config, password) {
+            const protocol = window.location.protocol;
+            const host = window.location.host;
+            const response = await fetch(`${protocol}//${host}/api/config`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config, password: password || undefined })
+            });
+            if (!response.ok) return null;
+            const data = await response.json();
+            return data && data.token ? data.token : null;
+        }
+
+        async function doUpdateConfig(uuid, config, password) {
+            const response = await fetch(`/api/config/${uuid}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ config, password: password || undefined })
+            });
+            return response.ok;
+        }
+
+        async function getStremioUrl() {
             const config = getConfiguration();
             const protocol = window.location.protocol;
             const host = window.location.host;
+
+            const token = await doSaveConfig(config, getConfigPassword());
+            if (token) {
+                _currentConfigToken = token;
+                showSaveButton(true);
+                return `${protocol}//${host}/${token}/manifest.json`;
+            }
+
             const configStr = encodeConfigSegment(config);
             return configStr
                 ? `${protocol}//${host}/${configStr}/manifest.json`
                 : `${protocol}//${host}/manifest.json`;
         }
 
-        function installAddon() {
-            const url = getStremioUrl().replace(/^https?:\/\//, "stremio://");
-            window.location.href = url;
+        async function installAddon() {
+            setButtonsLoading(true);
+            try {
+                const url = (await getStremioUrl()).replace(/^https?:\/\//, "stremio://");
+                window.location.href = url;
+            } finally {
+                setButtonsLoading(false);
+            }
         }
 
-        function copyUrl() {
-            const url = getStremioUrl();
-            navigator.clipboard.writeText(url).then(() => {
+        async function copyUrl() {
+            setButtonsLoading(true);
+            try {
+                const url = await getStremioUrl();
+                await navigator.clipboard.writeText(url);
                 const toast = document.getElementById("toast");
                 toast.classList.add("success", "show");
                 setTimeout(() => {
                     toast.classList.remove("show");
                 }, 3000);
-            });
+            } finally {
+                setButtonsLoading(false);
+            }
         }
 
         document.querySelectorAll(".catalog-nav-btn").forEach(button => {
@@ -4832,10 +4909,162 @@
             if (event.key === "Escape") {
                 toggleCustomStreamAddonsModal(false);
                 toggleCustomCatalogAddonsModal(false);
+                closePasswordModal();
             }
         });
 
-        applyInitialConfiguration(decodeConfigFromPath());
+        document.getElementById("submit-config-password-btn")?.addEventListener("click", async () => {
+            const input = document.getElementById("configPasswordLogin");
+            const error = document.getElementById("configPasswordLoginError");
+            if (!_pendingConfigToken || !input) return;
+            const password = input.value.trim();
+            if (!password) return;
+            if (error) error.style.display = "none";
+            const result = await loadConfigByToken(_pendingConfigToken, password);
+            if (result && result.needsPassword) {
+                if (error) { error.textContent = "Password errata"; error.style.display = "block"; }
+            } else if (result) {
+                closePasswordModal();
+                _currentConfigToken = _pendingConfigToken;
+                _currentConfigPassword = password;
+                const footerPw = document.getElementById("configPassword");
+                if (footerPw) footerPw.value = password;
+                applyInitialConfiguration(result);
+                showSaveButton(true);
+                _pendingConfigToken = null;
+            } else {
+                if (error) { error.textContent = "Errore nel caricamento"; error.style.display = "block"; }
+            }
+        });
+
+        document.getElementById("clear-config-password-btn")?.addEventListener("click", () => {
+            closePasswordModal();
+            _pendingConfigToken = null;
+            applyInitialConfiguration({});
+        });
+
+        document.getElementById("close-config-password-modal-btn")?.addEventListener("click", closePasswordModal);
+
+        document.querySelectorAll("[data-close-config-password-modal]").forEach(element => {
+            element.addEventListener("click", closePasswordModal);
+        });
+
+        document.getElementById("configPasswordLogin")?.addEventListener("keydown", event => {
+            if (event.key === "Enter") {
+                document.getElementById("submit-config-password-btn")?.click();
+            }
+        });
+
+        let _currentConfigToken = null;
+        let _currentConfigPassword = null;
+        let _pendingConfigToken = null;
+
+        function showSaveButton(show) {
+            const btn = document.getElementById("saveConfigBtn");
+            if (btn) btn.style.display = show ? "inline-block" : "none";
+        }
+
+        async function saveConfig() {
+            const config = getConfiguration();
+            const password = getConfigPassword();
+            const uuid = _currentConfigToken;
+            if (!uuid) return;
+
+            setButtonsLoading(true);
+            try {
+                const response = await fetch(`/api/config/${uuid}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ config, password: password || undefined })
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    _currentConfigPassword = password || null;
+                    const toast = document.getElementById("toast");
+                    toast.textContent = "Config salvata!";
+                    toast.classList.add("success", "show");
+                    setTimeout(() => {
+                        toast.classList.remove("show");
+                        toast.textContent = "";
+                    }, 3000);
+                } else {
+                    const toast = document.getElementById("toast");
+                    toast.textContent = "Errore salvataggio";
+                    toast.classList.add("success", "show");
+                    setTimeout(() => {
+                        toast.classList.remove("show");
+                        toast.textContent = "";
+                    }, 3000);
+                }
+            } catch (e) {
+                const toast = document.getElementById("toast");
+                toast.textContent = "Errore salvataggio";
+                toast.classList.add("success", "show");
+                setTimeout(() => {
+                    toast.classList.remove("show");
+                    toast.textContent = "";
+                }, 3000);
+            } finally {
+                setButtonsLoading(false);
+            }
+        }
+
+        async function loadConfigByToken(token, password) {
+            const url = password
+                ? `/api/config/${token}/verify`
+                : `/api/config/${token}`;
+            const options = { method: 'GET' };
+            if (password) {
+                options.method = 'POST';
+                options.headers = { 'Content-Type': 'application/json' };
+                options.body = JSON.stringify({ password });
+            }
+            const response = await fetch(url, options);
+            if (!response.ok) {
+                if (response.status === 401) {
+                    const errData = await response.json().catch(() => ({}));
+                    if (errData.hasPassword) return { needsPassword: true };
+                    return null;
+                }
+                return null;
+            }
+            return await response.json();
+        }
+
+        function openPasswordModal(token) {
+            _pendingConfigToken = token;
+            const modal = document.getElementById("config-password-modal");
+            const input = document.getElementById("configPasswordLogin");
+            const error = document.getElementById("configPasswordLoginError");
+            if (input) input.value = "";
+            if (error) error.style.display = "none";
+            if (modal) modal.setAttribute("aria-hidden", "false");
+        }
+
+        function closePasswordModal() {
+            const modal = document.getElementById("config-password-modal");
+            if (modal) modal.setAttribute("aria-hidden", "true");
+        }
+
+        (async () => {
+            const pathConfig = decodeConfigFromPath();
+            if (pathConfig && pathConfig._configToken) {
+                const token = pathConfig._configToken;
+                _currentConfigToken = token;
+                const result = await loadConfigByToken(token);
+                if (result && result.needsPassword) {
+                    openPasswordModal(token);
+                } else if (result) {
+                    applyInitialConfiguration(result);
+                    showSaveButton(true);
+                } else {
+                    _currentConfigToken = null;
+                    applyInitialConfiguration({});
+                }
+            } else {
+                applyInitialConfiguration(pathConfig);
+            }
+        })();
         loadCustomCatalogDefinitions();
         renderCatalogList("standard");
         renderCatalogList("top10");

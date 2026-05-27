@@ -31,3 +31,6 @@ build/
 .cache/
 coverage/
 *.tsbuildinfo
+
+# Stored configs
+configs/
