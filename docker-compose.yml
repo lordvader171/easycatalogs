@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   easy-catalogs:
     build: .
@@ -11,6 +9,7 @@ services:
       - ADDON_URL=http://localhost:7171
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379
+      - CONFIGS_DIR=/app/data/configs
     restart: unless-stopped
     depends_on:
       redis:
