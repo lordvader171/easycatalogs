@@ -1767,8 +1767,8 @@ function getPreferredTmdbTitle(item, type) {
 
     return (
         getTmdbTranslationTitle(italian, isMovie) ||
-        getTmdbTranslationTitle(english, isMovie) ||
         localized ||
+        getTmdbTranslationTitle(english, isMovie) ||
         getTmdbTranslationTitle(firstAvailable, isMovie) ||
         original ||
         null
