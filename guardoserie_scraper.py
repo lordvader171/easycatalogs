@@ -1,8 +1,10 @@
 import sys, json, time, re
-from scrapling.fetchers import StealthySession
+from playwright.sync_api import sync_playwright
 from scrapling.parser import Selector
 
 session = None
+browser = None
+context = None
 browser_cookies_loaded = False
 saved_cookies = []
 
@@ -14,48 +16,50 @@ def log(message):
     sys.stderr.flush()
 
 def get_session():
-    global session, browser_cookies_loaded
+    global session, browser, context, browser_cookies_loaded
     if session is None:
-        session = StealthySession(headless=True, solve_cloudflare=False)
-        session.start()
+        p = sync_playwright().start()
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            viewport={'width': 1920, 'height': 1080}
+        )
+        session = context
         browser_cookies_loaded = False
     if not browser_cookies_loaded and saved_cookies:
         try:
-            session.context.add_cookies(saved_cookies)
+            context.add_cookies(saved_cookies)
             browser_cookies_loaded = True
             log('[Guardoserie] Loaded cookies into browser context')
         except Exception as e:
             log(f'[Guardoserie] Cookie load failed: {e}')
-    return session
+    return context
 
 def save_browser_cookies():
     global saved_cookies
-    if session and session.context:
-        saved_cookies = session.context.cookies()
+    if context:
+        saved_cookies = context.cookies()
 
 def is_cloudflare_challenge(html):
     return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
 
 def scrapling_fetch_page(url, solve_cloudflare=False):
     log(f'[Guardoserie] Fetch {url} solve_cf={solve_cloudflare}')
-    s = get_session()
-    result = [None]
-    def action(page):
-        time.sleep(2 if solve_cloudflare else 0.1)
-        result[0] = page.content()
-    s.fetch(
-        url,
-        google_search=False,
-        page_action=action,
-        network_idle=solve_cloudflare,
-        load_dom=solve_cloudflare,
-        wait=3000 if solve_cloudflare else 100,
-        disable_resources=not solve_cloudflare,
-        timeout=30000 if solve_cloudflare else 12000,
-        solve_cloudflare=solve_cloudflare
-    )
-    save_browser_cookies()
-    return result[0]
+    ctx = get_session()
+    page = ctx.new_page()
+    try:
+        if solve_cloudflare:
+            time.sleep(2)
+        else:
+            time.sleep(0.1)
+        page.goto(url, wait_until='networkidle' if solve_cloudflare else 'domcontentloaded', timeout=30000 if solve_cloudflare else 12000)
+        if not solve_cloudflare:
+            page.wait_for_timeout(100)
+        html = page.content()
+        return html
+    finally:
+        page.close()
+        save_browser_cookies()
 
 def fetch_page(url):
     html = scrapling_fetch_page(url, solve_cloudflare=False)
@@ -137,13 +141,20 @@ def cmd_episode(url):
     return parse_episode(html)
 
 def cmd_close():
-    global session, browser_cookies_loaded
-    if session:
+    global session, browser, context, browser_cookies_loaded
+    if browser:
         try:
-            session.close()
+            browser.close()
+        except Exception:
+            pass
+    if session and session._connection:
+        try:
+            session._connection.stop()
         except Exception:
             pass
     session = None
+    browser = None
+    context = None
     browser_cookies_loaded = False
     return {'ok': True}
 
