@@ -25,7 +25,8 @@ let kitsuCacheVersion = 23;
 
 function createScraper() {
     const { spawn } = require('child_process');
-    const proc = spawn('python', ['guardoserie_scraper.py'], {
+    const pyCmd = process.platform === 'win32' ? 'python' : 'python3';
+    const proc = spawn(pyCmd, ['guardoserie_scraper.py'], {
         cwd: __dirname,
         stdio: ['pipe', 'pipe', 'pipe']
     });
