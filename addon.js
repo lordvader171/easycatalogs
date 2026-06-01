@@ -58,7 +58,14 @@ function createScraper() {
         if (text) console.error('[Guardoserie]', text);
     });
 
-    proc.on('exit', () => {
+    proc.on('error', err => {
+        console.error(`[Guardoserie] Scraper process error: ${err.message}`);
+        for (const p of pending.values()) p.reject(err);
+        pending.clear();
+    });
+
+    proc.on('exit', (code, signal) => {
+        console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
         for (const p of pending.values()) p.reject(new Error('Guardoserie scraper exited'));
         pending.clear();
     });
