@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Scrapling + curl_cffi (TLS fingerprinting) + patchright (Playwright fork) + Chromium
-RUN pip3 install scrapling curl_cffi playwright patchright --break-system-packages && \
+RUN pip3 install scrapling curl_cffi playwright patchright msgspec --break-system-packages && \
     python3 -m playwright install chromium && \
     python3 -m playwright install-deps chromium
 
