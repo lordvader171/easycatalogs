@@ -1,14 +1,23 @@
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 
 WORKDIR /app
 
-# Install system dependencies (needed for sqlite3 build)
-RUN apk add --no-cache python3 make g++
+# Install system dependencies: Python3 + Playwright browser deps
+RUN apt-get update && apt-get install -y \
+    python3 python3-pip \
+    libnss3 libnspr4 libatk-bridge2.0-0 libdrm2 libxkbcommon0 libxcomposite1 \
+    libxdamage1 libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
+    libatspi2.0-0 libwayland-client0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Scrapling (includes Playwright Python) + download Chromium
+RUN pip3 install scrapling --break-system-packages && \
+    python3 -m playwright install chromium
 
 # Copy package files first for better caching
 COPY package*.json ./
 
-# Install dependencies
+# Install npm dependencies
 RUN npm install
 
 # Copy application source code

@@ -1,4 +1,6 @@
 const { createClient } = require("redis");
+const fs = require("fs");
+const path = require("path");
 
 const redisUrl = typeof process.env.REDIS_URL === "string"
     ? process.env.REDIS_URL.trim()
@@ -8,6 +10,34 @@ let client = null;
 let cacheEnabled = false;
 let cacheDisabled = false;
 let failureLogged = false;
+const fileCachePath = process.env.FILE_CACHE_PATH || path.join(__dirname, "cache", "db.json");
+let fileCache = null;
+
+function loadFileCache() {
+    if (fileCache) return fileCache;
+    try {
+        if (fs.existsSync(fileCachePath)) {
+            const parsed = JSON.parse(fs.readFileSync(fileCachePath, "utf8"));
+            fileCache = parsed && typeof parsed === "object" ? parsed : {};
+        } else {
+            fileCache = {};
+        }
+    } catch (err) {
+        fileCache = {};
+    }
+    return fileCache;
+}
+
+function saveFileCache() {
+    try {
+        fs.mkdirSync(path.dirname(fileCachePath), { recursive: true });
+        const tmp = `${fileCachePath}.tmp`;
+        fs.writeFileSync(tmp, JSON.stringify(loadFileCache()), "utf8");
+        fs.renameSync(tmp, fileCachePath);
+    } catch (err) {
+        // Keep cache best-effort.
+    }
+}
 
 function logCacheDisabled(err) {
     if (failureLogged) return;
@@ -80,7 +110,16 @@ async function initializeCache() {
 void initializeCache();
 
 async function get(key) {
-    if (!cacheEnabled || !client || !client.isReady) return null;
+    if (!cacheEnabled || !client || !client.isReady) {
+        const entry = loadFileCache()[key];
+        if (!entry) return null;
+        if (entry.expiresAt && entry.expiresAt <= Date.now()) {
+            delete loadFileCache()[key];
+            saveFileCache();
+            return null;
+        }
+        return entry.value;
+    }
 
     try {
         const value = await client.get(key);
@@ -101,7 +140,14 @@ async function get(key) {
 }
 
 async function set(key, value, ttlSeconds = 86400) {
-    if (!cacheEnabled || !client || !client.isReady) return;
+    if (!cacheEnabled || !client || !client.isReady) {
+        loadFileCache()[key] = {
+            value,
+            expiresAt: ttlSeconds ? Date.now() + (ttlSeconds * 1000) : null
+        };
+        saveFileCache();
+        return;
+    }
 
     try {
         await client.set(key, JSON.stringify(value), {

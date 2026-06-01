@@ -34,3 +34,5 @@ coverage/
 
 # Stored configs
 configs/
+cache/db.json
+/__pycache__

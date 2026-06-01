@@ -5,11 +5,493 @@ const storage = new AsyncLocalStorage();
 const fetch = require("node-fetch");
 const path = require('path');
 const cache = require('./database');
+const { extractLoadm } = require('./loadm');
 
 const crypto = require('crypto');
 const fs = require('fs');
 
 const CONFIGS_DIR = process.env.CONFIGS_DIR || path.join(__dirname, 'configs');
+const GUARDOSERIE_MAX_SCAN_PAGES = Number.parseInt(process.env.GUARDOSERIE_MAX_SCAN_PAGES || "20", 10);
+const GUARDOSERIE_CATALOG_PAGE_SIZE = 20;
+const GUARDOSERIE_CACHE_TTL = 6 * 3600;
+const GUARDOSERIE_META_TTL = 24 * 3600;
+const GUARDOSERIE_WARMUP_ON_START = process.env.GUARDOSERIE_WARMUP_ON_START !== '0';
+const GUARDOSERIE_WARMUP_META = process.env.GUARDOSERIE_WARMUP_META !== '0';
+const GUARDOSERIE_WARMUP_INTERVAL_MS = Number.parseInt(process.env.GUARDOSERIE_WARMUP_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
+let guardoserieWarmupRunning = false;
+let metaCacheVersion = 27;
+let turkishMetaCacheVersion = 0;
+let kitsuCacheVersion = 23;
+
+function createScraper() {
+    const { spawn } = require('child_process');
+    const proc = spawn('python', ['guardoserie_scraper.py'], {
+        cwd: __dirname,
+        stdio: ['pipe', 'pipe', 'pipe']
+    });
+    let buffer = '';
+    let nextId = 0;
+    const pending = new Map();
+
+    proc.stdout.on('data', chunk => {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+        for (const line of lines) {
+            if (!line.trim()) continue;
+            try {
+                const response = JSON.parse(line);
+                const pendingReq = pending.get(response._requestId);
+                if (pendingReq) {
+                    pending.delete(response._requestId);
+                    pendingReq.resolve(response);
+                }
+            } catch (e) {
+                console.error('[Guardoserie] Invalid scraper response:', e.message);
+            }
+        }
+    });
+
+    proc.stderr.on('data', chunk => {
+        const text = chunk.toString().trim();
+        if (text) console.error('[Guardoserie]', text);
+    });
+
+    proc.on('exit', () => {
+        for (const p of pending.values()) p.reject(new Error('Guardoserie scraper exited'));
+        pending.clear();
+    });
+
+    function send(action, params = {}, timeoutMs = 45000) {
+        return new Promise((resolve, reject) => {
+            if (!proc || !proc.stdin.writable) {
+                reject(new Error('Guardoserie scraper not available'));
+                return;
+            }
+            const requestId = ++nextId;
+            pending.set(requestId, { resolve, reject });
+            proc.stdin.write(JSON.stringify({ ...params, action, _requestId: requestId }) + '\n');
+            setTimeout(() => {
+                if (pending.has(requestId)) {
+                    pending.delete(requestId);
+                    reject(new Error('Guardoserie scraper timeout'));
+                }
+            }, timeoutMs);
+        });
+    }
+
+    function kill() {
+        try { proc.kill(); } catch (_) {}
+    }
+
+    return { send, kill };
+}
+
+function isTurkishTmdbSeries(item) {
+    if (!item || typeof item !== 'object') return false;
+    return item.original_language === 'tr'
+        || (Array.isArray(item.origin_country) && item.origin_country.includes('TR'));
+}
+
+function getPosterFile(urlOrPath) {
+    if (!urlOrPath) return "";
+    const value = String(urlOrPath);
+    try {
+        return new URL(value.startsWith("http") ? value : `https://image.tmdb.org/t/p/w500${value}`).pathname.split('/').pop() || "";
+    } catch (_) {
+        return value.split('/').pop() || "";
+    }
+}
+
+function normalizeCatalogTitle(value) {
+    return String(value || "")
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, " ")
+        .replace(/ı/g, "i")
+        .trim();
+}
+
+async function getCachedGuardoserieCatalog(skip) {
+    const cacheKey = `guardoserie:catalog:${skip}`;
+    const cached = await cache.get(cacheKey);
+    if (cached && Array.isArray(cached.series)) return cached.series;
+
+    const result = await sendToGuardoserie('catalog', { skip }, 60000);
+    const series = result && result.ok && Array.isArray(result.series) ? result.series : [];
+    await cache.set(cacheKey, { series }, withTtlJitter(GUARDOSERIE_CACHE_TTL));
+    return series;
+}
+
+async function findGuardoserieSlugForIds(imdbId, tmdbId, item = null) {
+    const normalizedImdb = normalizeImdbId(imdbId);
+    if (normalizedImdb) {
+        const cachedByImdb = await cache.get(`guardoserie:slug:imdb:${normalizedImdb}`);
+        if (cachedByImdb && cachedByImdb.slug) return cachedByImdb.slug;
+    }
+
+    const targetTmdb = String(tmdbId || '').trim();
+    if (targetTmdb) {
+        const cachedByTmdb = await cache.get(`guardoserie:slug:tmdb:${targetTmdb}`);
+        if (cachedByTmdb && cachedByTmdb.slug) return cachedByTmdb.slug;
+    }
+
+    const targetPosterFile = getPosterFile(item && item.poster_path);
+    const targetTitles = new Set([
+        normalizeCatalogTitle(item && item.name),
+        normalizeCatalogTitle(item && item.original_name)
+    ].filter(Boolean));
+
+    // Extract Italian translation title from TMDB translations
+    if (item && item.translations && Array.isArray(item.translations.translations)) {
+        const itTranslation = item.translations.translations.find(t =>
+            t.iso_639_1 === 'it' && t.iso_3166_1 === 'IT' && t.data && t.data.title
+        );
+        if (itTranslation) {
+            targetTitles.add(normalizeCatalogTitle(itTranslation.data.title));
+        }
+    }
+
+    // Also try slug-ified versions of all titles
+    const slugVariants = new Set();
+    for (const rawTitle of [item && item.name, item && item.original_name]) {
+        if (rawTitle) {
+            slugVariants.add(String(rawTitle)
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, ''));
+        }
+    }
+    // Add Italian translation as slug variant
+    if (item && item.translations && Array.isArray(item.translations.translations)) {
+        const itTranslation = item.translations.translations.find(t =>
+            t.iso_639_1 === 'it' && t.iso_3166_1 === 'IT' && t.data && t.data.title
+        );
+        if (itTranslation) {
+            slugVariants.add(String(itTranslation.data.title)
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '-')
+                .replace(/^-|-$/g, ''));
+        }
+    }
+
+    console.log(`[Guardoserie] findSlug: imdb=${normalizedImdb} tmdb=${targetTmdb} titles=[${[...targetTitles].join(', ')}] slugVariants=[${[...slugVariants].join(', ')}] item.name="${item && item.name}" orig="${item && item.original_name}"`);
+
+    for (let page = 0; page < GUARDOSERIE_MAX_SCAN_PAGES; page++) {
+        const seriesList = await getCachedGuardoserieCatalog(page * GUARDOSERIE_CATALOG_PAGE_SIZE);
+        if (!seriesList.length) break;
+
+        for (const series of seriesList) {
+            const slug = series && series.slug;
+            if (!slug) continue;
+            const posterMatches = targetPosterFile && getPosterFile(series.poster) === targetPosterFile;
+            const titleMatches = targetTitles.has(normalizeCatalogTitle(series.name));
+            const slugMatches = slugVariants.has(slug);
+            if (posterMatches || titleMatches || slugMatches) {
+                if (normalizedImdb) await cache.set(`guardoserie:slug:imdb:${normalizedImdb}`, { slug }, 30 * 86400);
+                if (targetTmdb) await cache.set(`guardoserie:slug:tmdb:${targetTmdb}`, { slug }, 30 * 86400);
+                return slug;
+            }
+        }
+
+        if (seriesList.length < GUARDOSERIE_CATALOG_PAGE_SIZE) break;
+    }
+
+    // Fallback: try each slug variant as a direct URL on Guardoserie
+    for (const slug of slugVariants) {
+        try {
+            const result = await sendToGuardoserie('meta', { slug }, 30000);
+            if (result && result.ok && Array.isArray(result.seasons)) {
+                if (normalizedImdb) await cache.set(`guardoserie:slug:imdb:${normalizedImdb}`, { slug }, 30 * 86400);
+                if (targetTmdb) await cache.set(`guardoserie:slug:tmdb:${targetTmdb}`, { slug }, 30 * 86400);
+                return slug;
+            }
+        } catch (_) {}
+    }
+
+    return null;
+}
+
+let guardoserieScraper = null;
+let guardoserieBusy = false;
+const guardoserieHighQueue = [];
+const guardoserieLowQueue = [];
+let guardoserieQueueRunning = false;
+
+function startGuardoserieScraper() {
+    if (guardoserieScraper) return guardoserieScraper;
+    guardoserieScraper = createScraper();
+    return guardoserieScraper;
+}
+
+function processGuardoserieQueue() {
+    if (guardoserieQueueRunning) return;
+    guardoserieQueueRunning = true;
+
+    function next() {
+        if (!guardoserieScraper || !guardoserieScraper.send) {
+            setTimeout(next, 100);
+            return;
+        }
+        const req = guardoserieHighQueue.shift() || guardoserieLowQueue.shift();
+        if (!req) {
+            guardoserieQueueRunning = false;
+            return;
+        }
+        guardoserieBusy = true;
+        guardoserieScraper.send(req.action, req.params, req.timeoutMs)
+            .then(result => { req.resolve(result); })
+            .catch(err => { req.reject(err); })
+            .finally(() => {
+                guardoserieBusy = false;
+                next();
+            });
+    }
+
+    next();
+}
+
+function sendToGuardoserie(action, params = {}, timeoutMs = 45000) {
+    startGuardoserieScraper();
+    return new Promise((resolve, reject) => {
+        guardoserieHighQueue.push({ action, params, timeoutMs, resolve, reject });
+        processGuardoserieQueue();
+    });
+}
+
+function sendToGuardoserieLowPriority(action, params = {}, timeoutMs = 60000) {
+    startGuardoserieScraper();
+    return new Promise((resolve, reject) => {
+        guardoserieLowQueue.push({ action, params, timeoutMs, resolve, reject });
+        processGuardoserieQueue();
+    });
+}
+
+async function getGuardoserieMetaForTurkishSeries(item, primaryMediaId) {
+    if (!isTurkishTmdbSeries(item)) {
+        console.log(`[Guardoserie] Skipped: not Turkish lang=${item.original_language} country=${JSON.stringify(item.origin_country)}`);
+        return null;
+    }
+    const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id));
+    const slug = await findGuardoserieSlugForIds(imdbId, item.id, item);
+    console.log(`[Guardoserie] slug lookup: imdb=${imdbId} tmdb=${item.id} slug=${slug}`);
+    if (!slug) return null;
+
+    try {
+        const cacheKey = `guardoserie:meta:${slug}`;
+        let result = await cache.get(cacheKey);
+        if (!result) {
+            result = await sendToGuardoserie('meta', { slug }, 60000);
+            if (result && result.ok) {
+                await cache.set(cacheKey, result, withTtlJitter(GUARDOSERIE_META_TTL));
+            }
+        }
+        if (!result || !result.ok || !Array.isArray(result.seasons)) return null;
+
+        const videos = [];
+        for (const season of result.seasons) {
+            const seasonNumber = Number.parseInt(String(season.season || ''), 10);
+            if (!Number.isFinite(seasonNumber)) continue;
+            for (const episode of (season.episodes || [])) {
+                const episodeNumber = Number.parseInt(String(episode.id || ''), 10);
+                if (!Number.isFinite(episodeNumber)) continue;
+                videos.push({
+                    id: `${primaryMediaId}:${seasonNumber}:${episodeNumber}`,
+                    title: episode.title || `Episodio ${episodeNumber}`,
+                    season: seasonNumber,
+                    episode: episodeNumber
+                });
+            }
+        }
+
+        return videos.length > 0 ? {
+            title: result.title || null,
+            description: result.description || null,
+            videos
+        } : null;
+    } catch (e) {
+        console.error(`[Guardoserie] Meta override failed for ${slug}:`, e.message);
+        return null;
+    }
+}
+
+function parseSeriesEpisodeId(id) {
+    const match = String(id || '').trim().match(/^(tt\d+|tmdb:(?:tv:)?\d+|\d+):(\d+):(\d+)$/i);
+    if (!match) return null;
+    return {
+        baseId: match[1],
+        season: Number.parseInt(match[2], 10),
+        episode: Number.parseInt(match[3], 10)
+    };
+}
+
+async function resolveTmdbItemForStreamId(type, baseId, config = null) {
+    if (type !== 'series') return null;
+    try {
+        let tmdbId = null;
+        if (String(baseId).startsWith('tt')) {
+            tmdbId = await resolveTmdbIdFromImdb(baseId, 'series', config);
+        } else if (String(baseId).startsWith('tmdb:')) {
+            tmdbId = String(baseId).split(':').pop();
+        } else if (/^\d+$/.test(String(baseId))) {
+            tmdbId = String(baseId);
+        }
+        if (!tmdbId) return null;
+        return fetchTmdbDetails('tv', tmdbId, config);
+    } catch (e) {
+        return null;
+    }
+}
+
+async function fetchGuardoserieStreams(type, id, config = null) {
+    console.log(`[Guardoserie] fetchGuardoserieStreams called: type=${type} id=${id}`);
+    const parsed = parseSeriesEpisodeId(id);
+    if (!parsed || type !== 'series' || !Number.isFinite(parsed.season) || !Number.isFinite(parsed.episode)) {
+        console.log(`[Guardoserie] parseSeriesEpisodeId failed: id=${id} parsed=${JSON.stringify(parsed)}`);
+        return [];
+    }
+
+    const item = await resolveTmdbItemForStreamId(type, parsed.baseId, config);
+    const isTurkish = isTurkishTmdbSeries(item);
+    console.log(`[Guardoserie] Stream check: id=${id} baseId=${parsed.baseId} season=${parsed.season} episode=${parsed.episode} turkish=${isTurkish}`);
+    if (!isTurkish) return [];
+
+    const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id) || parsed.baseId);
+    const slug = await findGuardoserieSlugForIds(imdbId, item.id, item);
+    console.log(`[Guardoserie] Stream slug lookup: imdbId=${imdbId} tmdbId=${item.id} slug=${slug}`);
+    if (!slug) return [];
+
+    const guardoserieMeta = await getGuardoserieMetaForTurkishSeries(item, parsed.baseId);
+    const video = guardoserieMeta && Array.isArray(guardoserieMeta.videos)
+        ? guardoserieMeta.videos.find(v => Number(v.season) === parsed.season && Number(v.episode) === parsed.episode)
+        : null;
+    console.log(`[Guardoserie] Stream video match: video=${video ? video.id : 'null'}`);
+    if (!video) return [];
+
+    const metaResult = await cache.get(`guardoserie:meta:${slug}`);
+    const season = metaResult && Array.isArray(metaResult.seasons)
+        ? metaResult.seasons.find(s => Number(s.season) === parsed.season)
+        : null;
+    const episode = season && Array.isArray(season.episodes)
+        ? season.episodes.find(e => Number(e.id) === parsed.episode)
+        : null;
+    console.log(`[Guardoserie] Stream episode URL: slug=${slug} season=${parsed.season} ep=${parsed.episode} url=${episode ? episode.url : 'null'}`);
+    if (!episode || !episode.url) return [];
+
+    const iframe = await sendToGuardoserie('episode', { url: episode.url }, 45000);
+    console.log(`[Guardoserie] Stream iframe: ok=${iframe && iframe.ok} iframe_url=${iframe ? iframe.iframe_url : 'null'}`);
+    if (!iframe || !iframe.ok || !iframe.iframe_url) return [];
+
+    const raw = await extractLoadm(iframe.iframe_url, 'guardoserie.run');
+    console.log(`[Guardoserie] Stream loadm: m3u8=${raw.length > 0 ? raw[0].url : 'none'}`);
+    if (!raw.length) return [];
+
+    const seriesTitle = item.name || item.title || '';
+    const seasonStr = String(parsed.season).padStart(2, '0');
+    const episodeStr = String(parsed.episode).padStart(2, '0');
+    const displayTitle = seriesTitle ? `${seriesTitle} ${seasonStr}x${episodeStr}` : (raw[0].title || 'Stream');
+
+    return [{
+        name: '💿 HD',
+        url: raw[0].url,
+        title: `📁 ${displayTitle}\n📡 Guardoserie\n🔍EasyCatalogs`,
+        headers: raw[0].headers,
+        behaviorHints: {
+            notWebReady: true,
+            bingeGroup: 'guardoserie',
+            proxyHeaders: {
+                request: raw[0].headers
+            }
+        }
+    }];
+}
+
+async function warmupGuardoserie() {
+    if (!GUARDOSERIE_WARMUP_ON_START || guardoserieWarmupRunning) return;
+    guardoserieWarmupRunning = true;
+    console.log(`[Guardoserie] Warmup start pages=${GUARDOSERIE_MAX_SCAN_PAGES} meta=${GUARDOSERIE_WARMUP_META} streams=false`);
+    try {
+        startGuardoserieScraper();
+        let pages = 0;
+        let seriesCount = 0;
+        let metaCount = 0;
+        const seen = new Set();
+        for (let page = 0; page < GUARDOSERIE_MAX_SCAN_PAGES; page++) {
+            const cacheKey = `guardoserie:catalog:${page * GUARDOSERIE_CATALOG_PAGE_SIZE}`;
+            let seriesList = await cache.get(cacheKey);
+            if (!seriesList || !Array.isArray(seriesList.series)) {
+                const result = await sendToGuardoserieLowPriority('catalog', { skip: page * GUARDOSERIE_CATALOG_PAGE_SIZE }, 60000);
+                seriesList = result && result.ok && Array.isArray(result.series) ? { series: result.series } : { series: [] };
+                if (seriesList.series.length > 0) {
+                    await cache.set(cacheKey, seriesList, withTtlJitter(GUARDOSERIE_CACHE_TTL));
+                }
+            }
+            if (!seriesList.series.length) break;
+            pages += 1;
+            seriesCount += seriesList.series.length;
+            if (GUARDOSERIE_WARMUP_META) {
+                for (const series of seriesList.series) {
+                    const slug = series && series.slug;
+                    if (!slug || seen.has(slug)) continue;
+                    seen.add(slug);
+                    const metaCacheKey = `guardoserie:meta:${slug}`;
+                    if (await cache.get(metaCacheKey)) continue;
+                    try {
+                        const result = await sendToGuardoserieLowPriority('meta', { slug }, 60000);
+                        if (result && result.ok) {
+                            await cache.set(metaCacheKey, result, withTtlJitter(GUARDOSERIE_META_TTL));
+                            metaCount += 1;
+                            // Search TMDB by Guardoserie name to build slug→tmdb/imdb mapping
+                            const gName = result.title || series.name || '';
+                            if (gName) {
+                                const cacheKey = `guardoserie:slug:name:${normalizeCatalogTitle(gName)}`;
+                                const cached = await cache.get(cacheKey);
+                                if (!cached) {
+                                    try {
+                                        const searchUrl = `${BASE_URL}/search/tv?api_key=${getTmdbApiKey()}&query=${encodeURIComponent(gName)}&language=it-IT&page=1`;
+                                        const sRes = await fetch(searchUrl);
+                                        const sData = await sRes.json();
+                                        if (sData && Array.isArray(sData.results) && sData.results.length > 0) {
+                                            const found = sData.results[0];
+                                            await cache.set(cacheKey, { slug }, 30 * 86400);
+                                            console.log(`[Guardoserie] TMDB mapping: "${gName}" → slug=${slug} tmdb=${found.id} (${found.name})`);
+                                            if (found.id) {
+                                                await cache.set(`guardoserie:slug:tmdb:${found.id}`, { slug }, 30 * 86400);
+                                            }
+                                            try {
+                                                const extUrl = `${BASE_URL}/tv/${found.id}/external_ids?api_key=${getTmdbApiKey()}`;
+                                                const extRes = await fetch(extUrl);
+                                                const extData = await extRes.json();
+                                                if (extData && extData.imdb_id) {
+                                                    await cache.set(`guardoserie:slug:imdb:${extData.imdb_id}`, { slug }, 30 * 86400);
+                                                    console.log(`[Guardoserie] TMDB mapping: "${gName}" → imdb=${extData.imdb_id}`);
+                                                }
+                                            } catch (e) {
+                                                console.warn(`[Guardoserie] Failed external_ids for ${found.id}: ${e.message}`);
+                                            }
+                                        } else {
+                                            console.log(`[Guardoserie] TMDB no results: "${gName}" slug=${slug}`);
+                                        }
+                                    } catch (e) {
+                                        console.warn(`[Guardoserie] TMDB search error for "${gName}": ${e.message}`);
+                                    }
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        console.error(`[Guardoserie] Warmup meta skipped ${slug}: ${e.message}`);
+                    }
+                }
+            }
+            if (seriesList.series.length < GUARDOSERIE_CATALOG_PAGE_SIZE) break;
+        }
+        console.log(`[Guardoserie] Warmup done pages=${pages} series=${seriesCount} meta=${metaCount}`);
+        turkishMetaCacheVersion += 1;
+    } finally {
+        guardoserieWarmupRunning = false;
+    }
+}
 
 function ensureConfigsDir() {
     try {
@@ -4175,7 +4657,7 @@ async function fetchKitsuAnimeById(kitsuId) {
     const normalizedKitsuId = normalizeKitsuId(kitsuId);
     if (!normalizedKitsuId) return null;
 
-    const cacheKey = `kitsu:anime:v2:${normalizedKitsuId}`;
+    const cacheKey = `kitsu:anime:v${kitsuCacheVersion}:${normalizedKitsuId}`;
     let cached = await cache.get(cacheKey);
     if (isNegativeCache(cached)) return null;
     if (cached) {
@@ -5077,7 +5559,7 @@ async function fetchKitsuCatalogMetas(catalogId, requestedType, extra = {}, conf
     const erdbTypesKey = resolvedConfig.erdbTypes && typeof resolvedConfig.erdbTypes === "object"
         ? resolvedConfig.erdbTypes
         : {};
-    const cacheKey = `kitsu:catalog:v23:${normalizedCatalogId}:${JSON.stringify({
+    const cacheKey = `kitsu:catalog:v${kitsuCacheVersion}:${normalizedCatalogId}:${JSON.stringify({
         skip,
         search,
         discover,
@@ -5715,19 +6197,29 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(async ({ type, id }) => {
     const config = getRequestConfig();
 
-    if (!shouldReturnStreams(config)) {
-        return { streams: [] };
-    }
+    console.log(`[Stream] Handler called: type=${type} id=${id} returnStreams=${config.returnStreams}`);
 
     const normalizedId = String(id || "").trim();
     const isSupportedId = normalizedId.startsWith("kitsu:") ||
         normalizedId.startsWith("tmdb:") ||
         normalizedId.startsWith("tt");
     if (!isSupportedId) {
+        console.log(`[Stream] Unsupported ID: ${normalizedId}`);
         return { streams: [] };
     }
 
     try {
+        // Guardoserie streams bypass returnStreams check (Turkish series internal)
+        const guardoserieStreams = await fetchGuardoserieStreams(type, normalizedId, config);
+        if (guardoserieStreams.length > 0) {
+            return { streams: guardoserieStreams };
+        }
+
+        if (!shouldReturnStreams(config)) {
+            console.log(`[Stream] Blocked by shouldReturnStreams`);
+            return { streams: [] };
+        }
+
         const streams = await fetchAggregatedStreams(type, normalizedId, config);
         return { streams };
     } catch (error) {
@@ -5739,7 +6231,13 @@ builder.defineStreamHandler(async ({ type, id }) => {
 function getMetaCacheKey(type, id, config = null) {
     const resolvedConfig = getRequestConfig(config);
     const configHash = Object.keys(resolvedConfig).length > 0 ? JSON.stringify(resolvedConfig) : "default";
-    return `meta_v24${type}:${id}:${configHash}`;
+    return `meta_v27_w${metaCacheVersion}${type}:${id}:${configHash}`;
+}
+
+function getTurkishMetaCacheKey(type, id, config = null) {
+    const resolvedConfig = getRequestConfig(config);
+    const configHash = Object.keys(resolvedConfig).length > 0 ? JSON.stringify(resolvedConfig) : "default";
+    return `meta_v27_t${turkishMetaCacheVersion}${type}:${id}:${configHash}`;
 }
 
 async function buildMetaForId(type, id, config = null) {
@@ -5779,24 +6277,34 @@ async function buildMetaForId(type, id, config = null) {
 }
 
 async function getCachedMetaForId(type, id, config = null) {
-    const cacheKey = getMetaCacheKey(type, id, config);
     const metaTtl = type === "movie" ? CACHE_TTL_SECONDS.metaMovie : CACHE_TTL_SECONDS.metaSeries;
 
-    const cached = await cache.get(cacheKey);
+    // For series, check Turkish cache key first (separate versioning, never affects non-Turkish)
+    if (type === 'series') {
+        const turkishCached = await cache.get(getTurkishMetaCacheKey(type, id, config));
+        if (isNegativeCache(turkishCached)) return null;
+        if (turkishCached) return turkishCached;
+    }
+
+    const cached = await cache.get(getMetaCacheKey(type, id, config));
     if (isNegativeCache(cached)) return null;
     if (cached) return cached;
 
     try {
         const meta = await buildMetaForId(type, id, config);
         if (meta) {
-            await cache.set(cacheKey, meta, withTtlJitter(metaTtl));
+            const isTurkish = type === 'series' && isTurkishTmdbSeries(meta);
+            const targetKey = isTurkish ? getTurkishMetaCacheKey(type, id, config) : getMetaCacheKey(type, id, config);
+            await cache.set(targetKey, meta, withTtlJitter(metaTtl));
             return meta;
         }
 
-        await cache.set(cacheKey, createNegativeCache("meta_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
+        const negKey = type === 'series' ? getTurkishMetaCacheKey(type, id, config) : getMetaCacheKey(type, id, config);
+        await cache.set(negKey, createNegativeCache("meta_not_found"), NEGATIVE_CACHE_TTL_SECONDS);
     } catch (error) {
         console.error(`[Easy Catalogs] Meta Error (${type}:${id}): ${error.message}`);
-        await cache.set(cacheKey, createNegativeCache("meta_fetch_failed"), NEGATIVE_CACHE_TTL_SECONDS);
+        const negKey = type === 'series' ? getTurkishMetaCacheKey(type, id, config) : getMetaCacheKey(type, id, config);
+        await cache.set(negKey, createNegativeCache("meta_fetch_failed"), NEGATIVE_CACHE_TTL_SECONDS);
     }
 
     return null;
@@ -5962,6 +6470,12 @@ async function transformToMeta(item, type, config = null, options = {}) {
     if (includeVideos && !isMovie && item.seasons) {
         try {
             videos = await buildTmdbSeriesVideos(item, cinemetaMeta, config);
+            var guardoserieMeta = await getGuardoserieMetaForTurkishSeries(item, primaryMediaId);
+            if (guardoserieMeta && Array.isArray(guardoserieMeta.videos) && guardoserieMeta.videos.length > 0) {
+                videos = guardoserieMeta.videos;
+            } else if (isTurkishTmdbSeries(item) && guardoserieWarmupRunning) {
+                videos = [];
+            }
         } catch (e) {
             console.error(`[Easy Catalogs] Error fetching episodes for ${item.id}:`, e);
         }
@@ -5970,11 +6484,11 @@ async function transformToMeta(item, type, config = null, options = {}) {
     return {
         id: primaryMediaId,
         type: type,
-        name: getPreferredTmdbTitle(item, type),
+        name: (!isMovie && guardoserieMeta && guardoserieMeta.title) || getPreferredTmdbTitle(item, type),
         poster: poster,
         background: background,
         logo: logo,
-        description: item.overview,
+        description: item.overview || (!isMovie && guardoserieMeta && guardoserieMeta.description) || "",
         releaseInfo: releaseInfo,
         released: exactReleaseDate ? new Date(exactReleaseDate).toISOString() : null,
         year: year,
@@ -6051,7 +6565,9 @@ async function transformToMeta(item, type, config = null, options = {}) {
             defaultVideoId: isMovie ? primaryMediaId : null,
             hasScheduledVideos: !isMovie
         },
-        videos: videos
+        videos: videos,
+        original_language: item.original_language,
+        origin_country: item.origin_country
     };
 }
 
@@ -6866,11 +7382,7 @@ app.get('/manifest.json', async (req, res) => {
 
     const manifest = { ...addonInterface.manifest };
     manifest.catalogs = filteredCatalogs;
-    manifest.resources = shouldReturnStreams(config)
-        ? addonInterface.manifest.resources
-        : addonInterface.manifest.resources.filter(resource =>
-            !(resource && typeof resource === "object" && resource.name === "stream")
-        );
+    manifest.resources = addonInterface.manifest.resources;
     res.json(manifest);
 });
 
@@ -6890,4 +7402,10 @@ try {
 
 app.listen(PORT, () => {
     console.log(`Addon active on http://localhost:${PORT}`);
+    warmupGuardoserie().catch(error => console.error('[Guardoserie] Warmup error:', error.message));
+    if (GUARDOSERIE_WARMUP_ON_START && GUARDOSERIE_WARMUP_INTERVAL_MS > 0) {
+        setInterval(() => {
+            warmupGuardoserie().catch(error => console.error('[Guardoserie] Warmup error:', error.message));
+        }, GUARDOSERIE_WARMUP_INTERVAL_MS);
+    }
 });
