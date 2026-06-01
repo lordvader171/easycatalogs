@@ -10,8 +10,8 @@ RUN apt-get update && apt-get install -y \
     libatspi2.0-0 libwayland-client0 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Scrapling + curl_cffi (TLS fingerprinting for Cloudflare) + Playwright + Chromium
-RUN pip3 install scrapling playwright curl_cffi --break-system-packages && \
+# Install Scrapling + curl_cffi (TLS fingerprinting) + patchright (Playwright fork) + Chromium
+RUN pip3 install scrapling curl_cffi playwright patchright --break-system-packages && \
     python3 -m playwright install chromium && \
     python3 -m playwright install-deps chromium
 
