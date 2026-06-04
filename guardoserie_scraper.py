@@ -51,7 +51,7 @@ def scrapling_fetch_page(url, solve_cloudflare=False):
         load_dom=solve_cloudflare,
         wait=3000 if solve_cloudflare else 100,
         disable_resources=not solve_cloudflare,
-        timeout=30000 if solve_cloudflare else 12000,
+        timeout=30000 if solve_cloudflare else 30000,
         solve_cloudflare=solve_cloudflare
     )
     save_browser_cookies()
