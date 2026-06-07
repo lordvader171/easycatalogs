@@ -49,10 +49,11 @@ async function fetchWithRetry(url, options = {}) {
             const isLast = i === retries - 1;
             const isCallerAborted = options.signal && options.signal.aborted;
             const errCode = error.code || (error.name === "AbortError" ? "TIMEOUT" : "");
-            const isTransient = ["ECONNRESET", "ETIMEDOUT", "TIMEOUT", "ESOCKETTIMEDOUT", "EADDRINUSE", "ECONNREFUSED"].includes(errCode) || 
-                                error.message?.includes("socket hang up") || 
-                                error.message?.includes("hang up") ||
-                                error.message?.includes("reset");
+            const isTransient = ["ECONNRESET", "ETIMEDOUT", "TIMEOUT", "ESOCKETTIMEDOUT", "EADDRINUSE", "ECONNREFUSED", "ERR_STREAM_PREMATURE_CLOSE", "Z_BUF_ERROR"].includes(errCode) || 
+                                error.message?.toLowerCase().includes("socket hang up") || 
+                                error.message?.toLowerCase().includes("hang up") ||
+                                error.message?.toLowerCase().includes("reset") ||
+                                error.message?.toLowerCase().includes("premature");
             
             if (isLast || !isTransient || isCallerAborted) {
                 throw error;
