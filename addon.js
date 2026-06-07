@@ -3,33 +3,61 @@ const express = require('express');
 const { AsyncLocalStorage } = require('async_hooks');
 const storage = new AsyncLocalStorage();
 const nodeFetch = require("node-fetch");
+const http = require("http");
+const https = require("https");
+
+const httpAgent = new http.Agent({ keepAlive: true, maxSockets: 64, keepAliveMsecs: 5000 });
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 64, keepAliveMsecs: 5000 });
 
 async function fetchWithRetry(url, options = {}) {
     const retries = 3;
     let delay = 1000;
+    
+    if (options.signal && options.signal.aborted) {
+        throw new DOMException("The user aborted a request.", "AbortError");
+    }
+
     for (let i = 0; i < retries; i++) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
+        
+        const onAbort = () => controller.abort();
+        if (options.signal) {
+            options.signal.addEventListener("abort", onAbort);
+        }
+
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
-            
+            const parsedUrl = new URL(url);
+            const agent = parsedUrl.protocol === "https:" ? httpsAgent : httpAgent;
+
             const response = await nodeFetch(url, {
+                agent,
                 ...options,
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
+            if (options.signal) {
+                options.signal.removeEventListener("abort", onAbort);
+            }
             return response;
         } catch (error) {
+            clearTimeout(timeoutId);
+            if (options.signal) {
+                options.signal.removeEventListener("abort", onAbort);
+            }
+
             const isLast = i === retries - 1;
+            const isCallerAborted = options.signal && options.signal.aborted;
             const errCode = error.code || (error.name === "AbortError" ? "TIMEOUT" : "");
             const isTransient = ["ECONNRESET", "ETIMEDOUT", "TIMEOUT", "ESOCKETTIMEDOUT", "EADDRINUSE", "ECONNREFUSED"].includes(errCode) || 
                                 error.message?.includes("socket hang up") || 
                                 error.message?.includes("hang up") ||
                                 error.message?.includes("reset");
             
-            if (isLast || !isTransient) {
+            if (isLast || !isTransient || isCallerAborted) {
                 throw error;
             }
-            console.warn(`[Easy Catalogs] Fetch failed (${error.message}). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+            console.warn(`[Easy Catalogs] Fetch failed for ${url} (${error.message}). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
             await new Promise(resolve => setTimeout(resolve, delay));
             delay *= 2;
         }
