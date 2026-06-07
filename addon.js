@@ -19,7 +19,7 @@ async function fetchWithRetry(url, options = {}) {
 
     for (let i = 0; i < retries; i++) {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
+        const timeoutId = setTimeout(() => controller.abort(), options.timeout || 30000);
         
         const onAbort = () => controller.abort();
         if (options.signal) {
@@ -65,8 +65,63 @@ async function fetchWithRetry(url, options = {}) {
     }
 }
 
-const fetch = fetchWithRetry;
-global.fetch = fetchWithRetry;
+const maxConcurrentFetches = 15;
+let activeFetches = 0;
+const fetchQueue = [];
+
+function nextFetch() {
+    if (fetchQueue.length === 0 || activeFetches >= maxConcurrentFetches) {
+        return;
+    }
+    const { url, options, resolve, reject } = fetchQueue.shift();
+    activeFetches++;
+    
+    fetchWithRetry(url, options)
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+            activeFetches--;
+            nextFetch();
+        });
+}
+
+function fetchWithConcurrencyLimit(url, options = {}) {
+    if (options.signal && options.signal.aborted) {
+        return Promise.reject(new DOMException("The user aborted a request.", "AbortError"));
+    }
+
+    return new Promise((resolve, reject) => {
+        const queueEntry = { url, options, resolve, reject };
+        
+        const onAbort = () => {
+            const index = fetchQueue.indexOf(queueEntry);
+            if (index !== -1) {
+                fetchQueue.splice(index, 1);
+            }
+            reject(new DOMException("The user aborted a request.", "AbortError"));
+        };
+
+        if (options.signal) {
+            options.signal.addEventListener("abort", onAbort);
+        }
+
+        fetchQueue.push(queueEntry);
+        
+        queueEntry.resolve = (val) => {
+            if (options.signal) options.signal.removeEventListener("abort", onAbort);
+            resolve(val);
+        };
+        queueEntry.reject = (err) => {
+            if (options.signal) options.signal.removeEventListener("abort", onAbort);
+            reject(err);
+        };
+
+        nextFetch();
+    });
+}
+
+const fetch = fetchWithConcurrencyLimit;
+global.fetch = fetchWithConcurrencyLimit;
 const path = require('path');
 const cache = require('./database');
 const { extractLoadm } = require('./loadm');
