@@ -2,7 +2,42 @@ const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const express = require('express');
 const { AsyncLocalStorage } = require('async_hooks');
 const storage = new AsyncLocalStorage();
-const fetch = require("node-fetch");
+const nodeFetch = require("node-fetch");
+
+async function fetchWithRetry(url, options = {}) {
+    const retries = 3;
+    let delay = 1000;
+    for (let i = 0; i < retries; i++) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), options.timeout || 15000);
+            
+            const response = await nodeFetch(url, {
+                ...options,
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            return response;
+        } catch (error) {
+            const isLast = i === retries - 1;
+            const errCode = error.code || (error.name === "AbortError" ? "TIMEOUT" : "");
+            const isTransient = ["ECONNRESET", "ETIMEDOUT", "TIMEOUT", "ESOCKETTIMEDOUT", "EADDRINUSE", "ECONNREFUSED"].includes(errCode) || 
+                                error.message?.includes("socket hang up") || 
+                                error.message?.includes("hang up") ||
+                                error.message?.includes("reset");
+            
+            if (isLast || !isTransient) {
+                throw error;
+            }
+            console.warn(`[Easy Catalogs] Fetch failed (${error.message}). Retrying in ${delay}ms... (Attempt ${i + 1}/${retries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+            delay *= 2;
+        }
+    }
+}
+
+const fetch = fetchWithRetry;
+global.fetch = fetchWithRetry;
 const path = require('path');
 const cache = require('./database');
 const { extractLoadm } = require('./loadm');
