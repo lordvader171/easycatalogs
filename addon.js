@@ -187,6 +187,9 @@ function createScraper() {
         console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
         for (const p of pending.values()) p.reject(new Error('Guardoserie scraper exited'));
         pending.clear();
+        if (guardoserieScraper && guardoserieScraper.proc === proc) {
+            guardoserieScraper = null;
+        }
     });
 
     function send(action, params = {}, timeoutMs = 45000) {
@@ -211,7 +214,7 @@ function createScraper() {
         try { proc.kill(); } catch (_) {}
     }
 
-    return { send, kill };
+    return { send, kill, proc };
 }
 
 function isTurkishTmdbSeries(item) {
@@ -345,6 +348,25 @@ let guardoserieBusy = false;
 const guardoserieHighQueue = [];
 const guardoserieLowQueue = [];
 let guardoserieQueueRunning = false;
+let guardoserieIdleTimeout = null;
+
+function resetGuardoserieIdleTimeout() {
+    if (guardoserieIdleTimeout) {
+        clearTimeout(guardoserieIdleTimeout);
+        guardoserieIdleTimeout = null;
+    }
+    guardoserieIdleTimeout = setTimeout(() => {
+        if (guardoserieScraper && !guardoserieBusy && guardoserieHighQueue.length === 0 && guardoserieLowQueue.length === 0) {
+            console.log('[Guardoserie] Scraper is idle. Closing process to free memory...');
+            guardoserieScraper.send('close').catch(() => {}).finally(() => {
+                if (guardoserieScraper) {
+                    guardoserieScraper.kill();
+                    guardoserieScraper = null;
+                }
+            });
+        }
+    }, 30000); // 30 seconds idle timeout
+}
 
 function startGuardoserieScraper() {
     if (guardoserieScraper) return guardoserieScraper;
@@ -356,6 +378,11 @@ function processGuardoserieQueue() {
     if (guardoserieQueueRunning) return;
     guardoserieQueueRunning = true;
 
+    if (guardoserieIdleTimeout) {
+        clearTimeout(guardoserieIdleTimeout);
+        guardoserieIdleTimeout = null;
+    }
+
     function next() {
         if (!guardoserieScraper || !guardoserieScraper.send) {
             setTimeout(next, 100);
@@ -364,6 +391,7 @@ function processGuardoserieQueue() {
         const req = guardoserieHighQueue.shift() || guardoserieLowQueue.shift();
         if (!req) {
             guardoserieQueueRunning = false;
+            resetGuardoserieIdleTimeout();
             return;
         }
         guardoserieBusy = true;
