@@ -5,6 +5,8 @@ from scrapling.parser import Selector
 session = None
 browser_cookies_loaded = False
 saved_cookies = []
+fetch_count = 0
+MAX_FETCHES_PER_SESSION = 25
 
 STREMIO_CATALOG_PAGE_SIZE = 20
 SITE_CATALOG_PAGE_SIZE = 40
@@ -14,7 +16,16 @@ def log(message):
     sys.stderr.flush()
 
 def get_session():
-    global session, browser_cookies_loaded
+    global session, browser_cookies_loaded, fetch_count
+    if session is not None and fetch_count >= MAX_FETCHES_PER_SESSION:
+        log(f'[Guardoserie] Session reached {fetch_count} fetches. Restarting session to free memory...')
+        try:
+            session.close()
+        except Exception as e:
+            log(f'[Guardoserie] Error closing session: {e}')
+        session = None
+        fetch_count = 0
+
     if session is None:
         session = StealthySession(headless=True, solve_cloudflare=False)
         session.start()
@@ -37,12 +48,15 @@ def is_cloudflare_challenge(html):
     return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
 
 def scrapling_fetch_page(url, solve_cloudflare=False):
+    global fetch_count
     log(f'[Guardoserie] Fetch {url} solve_cf={solve_cloudflare}')
     s = get_session()
     result = [None]
     def action(page):
         time.sleep(2 if solve_cloudflare else 0.1)
         result[0] = page.content()
+    
+    fetch_count += 1
     s.fetch(
         url,
         google_search=False,
