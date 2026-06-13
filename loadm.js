@@ -15,7 +15,7 @@ function httpGet(url, headers) {
     });
 }
 
-async function extractLoadm(playerUrl, referer = 'guardoserie.run') {
+async function extractLoadm(playerUrl, referer = 'guardoserie.living') {
     try {
         if (!playerUrl || !playerUrl.includes('#')) return [];
 

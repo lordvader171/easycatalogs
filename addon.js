@@ -538,7 +538,7 @@ async function fetchGuardoserieStreams(type, id, config = null) {
     console.log(`[Guardoserie] Stream iframe: ok=${iframe && iframe.ok} iframe_url=${iframe ? iframe.iframe_url : 'null'}`);
     if (!iframe || !iframe.ok || !iframe.iframe_url) return [];
 
-    const raw = await extractLoadm(iframe.iframe_url, 'guardoserie.run');
+    const raw = await extractLoadm(iframe.iframe_url, 'guardoserie.living');
     console.log(`[Guardoserie] Stream loadm: m3u8=${raw.length > 0 ? raw[0].url : 'none'}`);
     if (!raw.length) return [];
 
