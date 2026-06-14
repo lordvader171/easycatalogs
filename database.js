@@ -103,14 +103,14 @@ async function migrateKeysFromRedisToSqlite(redisClient, sqliteDbInstance) {
     let migratedCount = 0;
 
     for (const pattern of patterns) {
-        let cursor = 0;
+        let cursor = "0";
         do {
             try {
                 const reply = await redisClient.scan(cursor, {
                     MATCH: pattern,
                     COUNT: 100
                 });
-                cursor = reply.cursor;
+                cursor = String(reply.cursor);
                 const keys = reply.keys;
                 
                 if (keys && keys.length > 0) {
@@ -134,7 +134,7 @@ async function migrateKeysFromRedisToSqlite(redisClient, sqliteDbInstance) {
                 console.error("[Cache Migration] Error migrating keys:", err);
                 break;
             }
-        } while (cursor !== 0);
+        } while (cursor !== "0");
     }
     
     if (migratedCount > 0) {
