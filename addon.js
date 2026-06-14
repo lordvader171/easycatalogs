@@ -129,7 +129,10 @@ const { extractLoadm } = require('./loadm');
 const crypto = require('crypto');
 const fs = require('fs');
 
-const CONFIGS_DIR = process.env.CONFIGS_DIR || path.join(__dirname, 'configs');
+const defaultConfigsDir = fs.existsSync("/app/data")
+    ? "/app/data/configs"
+    : path.join(__dirname, "data", "configs");
+const CONFIGS_DIR = process.env.CONFIGS_DIR || defaultConfigsDir;
 const GUARDOSERIE_MAX_SCAN_PAGES = Number.parseInt(process.env.GUARDOSERIE_MAX_SCAN_PAGES || "20", 10);
 const GUARDOSERIE_CATALOG_PAGE_SIZE = 20;
 const GUARDOSERIE_CACHE_TTL = 6 * 3600;

@@ -9,14 +9,12 @@ services:
       - ADDON_URL=http://localhost:7171
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379
-      - CONFIGS_DIR=/app/data/configs
+      - CACHE_TYPE=hybrid # Options: 'hybrid' (attempts Redis connection for fast cache + SQLite for long-term mappings) or 'sqlite' (forces SQLite only)
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
     volumes:
-      - .:/app
-      - /app/node_modules
       - ./data:/app/data
 
   redis:
