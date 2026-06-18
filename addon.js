@@ -30,9 +30,12 @@ async function fetchWithRetry(url, options = {}) {
             const parsedUrl = new URL(url);
             const agent = parsedUrl.protocol === "https:" ? httpsAgent : httpAgent;
 
+            const headers = { "Accept-Encoding": "identity", ...(options.headers || {}) };
+
             const response = await nodeFetch(url, {
                 agent,
                 ...options,
+                headers,
                 signal: controller.signal
             });
             clearTimeout(timeoutId);
