@@ -320,6 +320,25 @@
             gap: 0.85rem;
         }
 
+        .artwork-source-panel {
+            margin-top: 1rem;
+            padding: 1.1rem;
+            border-radius: 1rem;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            display: flex;
+            flex-direction: column;
+            gap: 0.85rem;
+        }
+
+        .artwork-source-panel > .input-group:first-child {
+            margin-top: 0;
+        }
+
+        .artwork-source-panel .nested-settings-title {
+            margin-top: 0.25rem;
+        }
+
         .erdb-section-title {
             font-size: 0.9rem;
             font-weight: 700;
@@ -2034,71 +2053,150 @@
                                 </div>
                             </div>
                             <div class="input-group" style="margin-top: 1rem;">
-                                <label for="erdbToken">ERDB Token</label>
-                                <input type="text" id="erdbToken" placeholder="Incolla qui il token Tk-...">
+                                <label>Fonte Artwork</label>
                                 <div class="input-hint">
-                                    Incolla il token ERDB generato dal configuratore dopo il login. Le chiavi API,
-                                    i layout, i provider e le preferenze artwork restano salvati lato server dietro al
-                                    token.
-                                    <a href="https://easyratingsdb.com" target="_blank" rel="noopener">Apri ERDB</a>
+                                    Scegli la fonte per poster, backdrop, logo e thumbnail degli episodi. ERDB e URL
+                                    Custom sono mutuamente esclusivi: attivane uno solo.
                                 </div>
-                                <div id="erdbSettings" style="display: none;">
-                                    <div class="nested-settings-title">Impostazioni ERDB</div>
-                                    <div class="input-group" id="erdbBaseUrlGroup"
-                                        style="margin-top: 1rem; display: none;">
-                                        <label for="erdbBaseUrl">ERDB Base URL (opzionale)</label>
-                                        <input type="text" id="erdbBaseUrl" placeholder="https://easyratingsdb.com">
+                                <div class="anime-source-toggle" id="artworkSourceToggle" role="radiogroup"
+                                    aria-label="Fonte artwork" style="margin-top: 0.5rem;">
+                                    <button class="anime-source-option active" type="button"
+                                        data-artwork-source="erdb" role="radio" aria-checked="true">ERDB</button>
+                                    <button class="anime-source-option" type="button"
+                                        data-artwork-source="custom" role="radio" aria-checked="false">URL Custom</button>
+                                    <button class="anime-source-option" type="button"
+                                        data-artwork-source="none" role="radio" aria-checked="false">Nessuno</button>
+                                </div>
+                                <div id="artworkSourceErdb" class="artwork-source-panel">
+                                    <div class="input-group" style="margin-top: 1rem;">
+                                        <label for="erdbToken">ERDB Token</label>
+                                        <input type="text" id="erdbToken" placeholder="Incolla qui il token Tk-...">
                                         <div class="input-hint">
-                                            Lascia il valore predefinito oppure imposta un'istanza ERDB self-hosted. Lo
-                                            slash
-                                            finale viene normalizzato automaticamente.
+                                            Incolla il token ERDB generato dal configuratore dopo il login. Le chiavi
+                                            API, i layout, i provider e le preferenze artwork restano salvati lato server
+                                            dietro al token.
+                                            <a href="https://easyratingsdb.com" target="_blank" rel="noopener">Apri
+                                                ERDB</a>
+                                        </div>
+                                        <div id="erdbSettings" style="display: none;">
+                                            <div class="nested-settings-title">Impostazioni ERDB</div>
+                                            <div class="input-group" id="erdbBaseUrlGroup"
+                                                style="margin-top: 1rem; display: none;">
+                                                <label for="erdbBaseUrl">ERDB Base URL (opzionale)</label>
+                                                <input type="text" id="erdbBaseUrl"
+                                                    placeholder="https://easyratingsdb.com">
+                                                <div class="input-hint">
+                                                    Lascia il valore predefinito oppure imposta un'istanza ERDB
+                                                    self-hosted. Lo slash finale viene normalizzato automaticamente.
+                                                </div>
+                                            </div>
+                                            <div class="input-group" id="erdbTypeToggles" style="display: none;">
+                                                <label>ERDB Artwork</label>
+                                                <div class="feature-toggle-row">
+                                                    <label class="feature-toggle-copy" for="erdbEnablePoster">
+                                                        <div class="feature-toggle-title">Poster</div>
+                                                        <div class="feature-toggle-hint">Usa ERDB per i poster.</div>
+                                                    </label>
+                                                    <label class="switch">
+                                                        <input type="checkbox" id="erdbEnablePoster" checked>
+                                                        <span class="slider"></span>
+                                                    </label>
+                                                </div>
+                                                <div class="feature-toggle-row">
+                                                    <label class="feature-toggle-copy" for="erdbEnableBackdrop">
+                                                        <div class="feature-toggle-title">Backdrop</div>
+                                                        <div class="feature-toggle-hint">Usa ERDB per i backdrop.</div>
+                                                    </label>
+                                                    <label class="switch">
+                                                        <input type="checkbox" id="erdbEnableBackdrop" checked>
+                                                        <span class="slider"></span>
+                                                    </label>
+                                                </div>
+                                                <div class="feature-toggle-row">
+                                                    <label class="feature-toggle-copy" for="erdbEnableLogo">
+                                                        <div class="feature-toggle-title">Logo</div>
+                                                        <div class="feature-toggle-hint">Usa ERDB per i logo.</div>
+                                                    </label>
+                                                    <label class="switch">
+                                                        <input type="checkbox" id="erdbEnableLogo" checked>
+                                                        <span class="slider"></span>
+                                                    </label>
+                                                </div>
+                                                <div class="feature-toggle-row">
+                                                    <label class="feature-toggle-copy" for="erdbEnableThumbnail">
+                                                        <div class="feature-toggle-title">Thumbnail</div>
+                                                        <div class="feature-toggle-hint">Usa ERDB per le thumbnail degli
+                                                            episodi.</div>
+                                                    </label>
+                                                    <label class="switch">
+                                                        <input type="checkbox" id="erdbEnableThumbnail" checked>
+                                                        <span class="slider"></span>
+                                                    </label>
+                                                </div>
+                                                <div class="input-hint">Se un tipo Ã¨ disattivato, l'addon mantiene
+                                                    l'artwork originale.
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div class="input-group" id="erdbTypeToggles" style="display: none;">
-                                        <label>ERDB Artwork</label>
-                                        <div class="feature-toggle-row">
-                                            <label class="feature-toggle-copy" for="erdbEnablePoster">
-                                                <div class="feature-toggle-title">Poster</div>
-                                                <div class="feature-toggle-hint">Usa ERDB per i poster.</div>
-                                            </label>
-                                            <label class="switch">
-                                                <input type="checkbox" id="erdbEnablePoster" checked>
-                                                <span class="slider"></span>
-                                            </label>
+                                </div>
+                                <div id="artworkSourceCustom" class="artwork-source-panel" style="display: none;">
+                                    <div class="input-group" style="margin-top: 1rem;">
+                                        <label>URL Artwork Custom</label>
+                                        <div class="input-hint">
+                                            Template URL per recuperare artwork da fonte custom. Variabili:
+                                            <code>{id}</code>, <code>{imdb_id}</code>, <code>{tmdb_id}</code>,
+                                            <code>{tvdb_id}</code>, <code>{mal_id}</code>, <code>{kitsu_id}</code>,
+                                            <code>{anilist_id}</code>, <code>{anidb_id}</code>,
+                                            <code>{type}</code> (<code>movie</code>/<code>tv</code>). Se un placeholder
+                                            non ha valore per l'item, l'URL viene saltato e si usa l'artwork originale.
                                         </div>
-                                        <div class="feature-toggle-row">
-                                            <label class="feature-toggle-copy" for="erdbEnableBackdrop">
-                                                <div class="feature-toggle-title">Backdrop</div>
-                                                <div class="feature-toggle-hint">Usa ERDB per i backdrop.</div>
-                                            </label>
-                                            <label class="switch">
-                                                <input type="checkbox" id="erdbEnableBackdrop" checked>
-                                                <span class="slider"></span>
-                                            </label>
+                                        <div class="input-group" style="margin-top: 0.75rem;">
+                                            <label for="customPosterUrl">Poster URL</label>
+                                            <input type="text" id="customPosterUrl"
+                                                placeholder="https://example.com/poster/{imdb_id}.jpg">
                                         </div>
-                                        <div class="feature-toggle-row">
-                                            <label class="feature-toggle-copy" for="erdbEnableLogo">
-                                                <div class="feature-toggle-title">Logo</div>
-                                                <div class="feature-toggle-hint">Usa ERDB per i logo.</div>
-                                            </label>
-                                            <label class="switch">
-                                                <input type="checkbox" id="erdbEnableLogo" checked>
-                                                <span class="slider"></span>
-                                            </label>
+                                        <div class="input-group">
+                                            <label for="customBackdropUrl">Backdrop URL</label>
+                                            <input type="text" id="customBackdropUrl"
+                                                placeholder="https://example.com/backdrop/{tmdb_id}.jpg">
                                         </div>
-                                        <div class="feature-toggle-row">
-                                            <label class="feature-toggle-copy" for="erdbEnableThumbnail">
-                                                <div class="feature-toggle-title">Thumbnail</div>
-                                                <div class="feature-toggle-hint">Usa ERDB per le thumbnail degli
-                                                    episodi.</div>
-                                            </label>
-                                            <label class="switch">
-                                                <input type="checkbox" id="erdbEnableThumbnail" checked>
-                                                <span class="slider"></span>
-                                            </label>
+                                        <div class="input-group">
+                                            <label for="customLogoUrl">Logo URL</label>
+                                            <input type="text" id="customLogoUrl"
+                                                placeholder="https://example.com/logo/{imdb_id}.png">
                                         </div>
-                                        <div class="input-hint">Se un tipo Ã¨ disattivato, l'addon mantiene l'artwork
-                                            originale.
+                                        <div class="input-group">
+                                            <label for="customThumbnailUrl">Thumbnail URL (episodi)</label>
+                                            <input type="text" id="customThumbnailUrl"
+                                                placeholder="https://example.com/thumb/{id}.jpg">
+                                        </div>
+                                    </div>
+                                    <div class="input-group" style="margin-top: 1rem;">
+                                        <label>URL Artwork Custom Kitsu</label>
+                                        <div class="input-hint">
+                                            Template URL separato per i cataloghi anime con fonte Kitsu. Usa principalmente
+                                            <code>{kitsu_id}</code>, <code>{id}</code>, <code>{type}</code>.
+                                        </div>
+                                        <div class="input-group" style="margin-top: 0.75rem;">
+                                            <label for="customKitsuPosterUrl">Poster URL Kitsu</label>
+                                            <input type="text" id="customKitsuPosterUrl"
+                                                placeholder="https://example.com/kitsu/poster/{kitsu_id}.jpg">
+                                        </div>
+                                        <div class="input-group">
+                                            <label for="customKitsuBackdropUrl">Backdrop URL Kitsu</label>
+                                            <input type="text" id="customKitsuBackdropUrl"
+                                                placeholder="https://example.com/kitsu/backdrop/{kitsu_id}.jpg">
+                                        </div>
+                                        <div class="input-group">
+                                            <label for="customKitsuLogoUrl">Logo URL Kitsu</label>
+                                            <input type="text" id="customKitsuLogoUrl"
+                                                placeholder="https://example.com/kitsu/logo/{kitsu_id}.png">
+                                        </div>
+                                        <div class="input-group">
+                                            <label for="customKitsuThumbnailUrl">Thumbnail URL Kitsu</label>
+                                            <input type="text" id="customKitsuThumbnailUrl"
+                                                placeholder="https://example.com/kitsu/thumb/{id}.jpg">
                                         </div>
                                     </div>
                                 </div>
@@ -2739,7 +2837,31 @@
             if (backdropToggle) backdropToggle.checked = enabledTypes.backdrop !== false;
             if (logoToggle) logoToggle.checked = enabledTypes.logo !== false;
             if (thumbnailToggle) thumbnailToggle.checked = enabledTypes.thumbnail !== false;
-            updateErdbToggleVisibility();
+            applyCustomAssetUrlFields(config);
+            setArtworkSource(detectArtworkSourceFromConfig(config));
+        }
+
+        function applyCustomAssetUrlFields(config) {
+            const custom = config && config.customAssetUrls && typeof config.customAssetUrls === 'object'
+                ? config.customAssetUrls
+                : {};
+            const kitsuCustom = config && config.customKitsuAssetUrls && typeof config.customKitsuAssetUrls === 'object'
+                ? config.customKitsuAssetUrls
+                : {};
+            const fields = [
+                ['customPosterUrl', custom.poster],
+                ['customBackdropUrl', custom.backdrop],
+                ['customLogoUrl', custom.logo],
+                ['customThumbnailUrl', custom.thumbnail],
+                ['customKitsuPosterUrl', kitsuCustom.poster],
+                ['customKitsuBackdropUrl', kitsuCustom.backdrop],
+                ['customKitsuLogoUrl', kitsuCustom.logo],
+                ['customKitsuThumbnailUrl', kitsuCustom.thumbnail]
+            ];
+            fields.forEach(([id, value]) => {
+                const input = document.getElementById(id);
+                if (input) input.value = typeof value === 'string' ? value : '';
+            });
         }
 
         function updateErdbToggleVisibility() {
@@ -2752,6 +2874,39 @@
             erdbSettings.style.display = hasValue ? '' : 'none';
             erdbBaseUrlGroup.style.display = hasValue ? '' : 'none';
             toggles.style.display = hasValue ? '' : 'none';
+        }
+
+        const ARTWORK_SOURCES = ['erdb', 'custom', 'none'];
+        let selectedArtworkSource = 'erdb';
+
+        function setArtworkSource(source) {
+            selectedArtworkSource = ARTWORK_SOURCES.includes(source) ? source : 'erdb';
+            const toggle = document.getElementById('artworkSourceToggle');
+            if (toggle) {
+                toggle.querySelectorAll('.anime-source-option').forEach(btn => {
+                    const isActive = btn.dataset.artworkSource === selectedArtworkSource;
+                    btn.classList.toggle('active', isActive);
+                    btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+                });
+            }
+            const erdbPanel = document.getElementById('artworkSourceErdb');
+            const customPanel = document.getElementById('artworkSourceCustom');
+            if (erdbPanel) erdbPanel.style.display = selectedArtworkSource === 'erdb' ? '' : 'none';
+            if (customPanel) customPanel.style.display = selectedArtworkSource === 'custom' ? '' : 'none';
+            if (selectedArtworkSource === 'erdb') updateErdbToggleVisibility();
+        }
+
+        function detectArtworkSourceFromConfig(config) {
+            const custom = config && config.customAssetUrls && typeof config.customAssetUrls === 'object'
+                ? config.customAssetUrls : null;
+            const kitsuCustom = config && config.customKitsuAssetUrls && typeof config.customKitsuAssetUrls === 'object'
+                ? config.customKitsuAssetUrls : null;
+            const hasCustom = (custom && Object.keys(custom).length > 0) ||
+                (kitsuCustom && Object.keys(kitsuCustom).length > 0);
+            if (hasCustom) return 'custom';
+            const hasErdb = !!(config && (config.erdbToken || config.erdbConfig));
+            if (hasErdb) return 'erdb';
+            return 'erdb';
         }
 
         function getBaseCatalogId(id) {
@@ -4608,24 +4763,50 @@
             if (customStreamAddons.length > 0) config.customStreamAddons = customStreamAddons;
             if (customCatalogAddons.length > 0) config.customCatalogAddons = customCatalogAddons;
 
-            const erdbTokenValue = document.getElementById("erdbToken").value.trim();
-            const erdbBaseUrlValue = normalizeErdbBaseUrl(document.getElementById("erdbBaseUrl").value.trim());
-            const legacyErdbConfigValue = document.body.dataset.legacyErdbConfig || "";
-            if (erdbTokenValue || legacyErdbConfigValue) {
-                if (erdbTokenValue) {
-                    config.erdbToken = erdbTokenValue;
-                    if (erdbBaseUrlValue && erdbBaseUrlValue !== DEFAULT_ERDB_BASE_URL) {
-                        config.erdbBaseUrl = erdbBaseUrlValue;
+            config.artworkSource = selectedArtworkSource;
+
+            if (selectedArtworkSource === 'erdb') {
+                const erdbTokenValue = document.getElementById("erdbToken").value.trim();
+                const erdbBaseUrlValue = normalizeErdbBaseUrl(document.getElementById("erdbBaseUrl").value.trim());
+                const legacyErdbConfigValue = document.body.dataset.legacyErdbConfig || "";
+                if (erdbTokenValue || legacyErdbConfigValue) {
+                    if (erdbTokenValue) {
+                        config.erdbToken = erdbTokenValue;
+                        if (erdbBaseUrlValue && erdbBaseUrlValue !== DEFAULT_ERDB_BASE_URL) {
+                            config.erdbBaseUrl = erdbBaseUrlValue;
+                        }
+                    } else if (legacyErdbConfigValue) {
+                        config.erdbConfig = legacyErdbConfigValue;
                     }
-                } else if (legacyErdbConfigValue) {
-                    config.erdbConfig = legacyErdbConfigValue;
+                    const erdbTypes = {};
+                    if (!document.getElementById("erdbEnablePoster").checked) erdbTypes.poster = false;
+                    if (!document.getElementById("erdbEnableBackdrop").checked) erdbTypes.backdrop = false;
+                    if (!document.getElementById("erdbEnableLogo").checked) erdbTypes.logo = false;
+                    if (!document.getElementById("erdbEnableThumbnail").checked) erdbTypes.thumbnail = false;
+                    if (Object.keys(erdbTypes).length > 0) config.erdbTypes = erdbTypes;
                 }
-                const erdbTypes = {};
-                if (!document.getElementById("erdbEnablePoster").checked) erdbTypes.poster = false;
-                if (!document.getElementById("erdbEnableBackdrop").checked) erdbTypes.backdrop = false;
-                if (!document.getElementById("erdbEnableLogo").checked) erdbTypes.logo = false;
-                if (!document.getElementById("erdbEnableThumbnail").checked) erdbTypes.thumbnail = false;
-                if (Object.keys(erdbTypes).length > 0) config.erdbTypes = erdbTypes;
+            }
+
+            if (selectedArtworkSource === 'custom') {
+                const customAssetUrls = {};
+                const customKitsuAssetUrls = {};
+                const customFields = [
+                    ['customPosterUrl', 'poster', customAssetUrls],
+                    ['customBackdropUrl', 'backdrop', customAssetUrls],
+                    ['customLogoUrl', 'logo', customAssetUrls],
+                    ['customThumbnailUrl', 'thumbnail', customAssetUrls],
+                    ['customKitsuPosterUrl', 'poster', customKitsuAssetUrls],
+                    ['customKitsuBackdropUrl', 'backdrop', customKitsuAssetUrls],
+                    ['customKitsuLogoUrl', 'logo', customKitsuAssetUrls],
+                    ['customKitsuThumbnailUrl', 'thumbnail', customKitsuAssetUrls]
+                ];
+                customFields.forEach(([id, key, target]) => {
+                    const input = document.getElementById(id);
+                    const value = input ? input.value.trim() : '';
+                    if (value) target[key] = value;
+                });
+                if (Object.keys(customAssetUrls).length > 0) config.customAssetUrls = customAssetUrls;
+                if (Object.keys(customKitsuAssetUrls).length > 0) config.customKitsuAssetUrls = customKitsuAssetUrls;
             }
 
             config.animeCatalogSource = selectedAnimeSource;
@@ -4820,6 +5001,12 @@
         if (erdbTokenInput) {
             erdbTokenInput.addEventListener("input", updateErdbToggleVisibility);
         }
+
+        document.querySelectorAll("[data-artwork-source]").forEach(button => {
+            button.addEventListener("click", () => {
+                setArtworkSource(button.dataset.artworkSource);
+            });
+        });
 
         const returnStreamsInput = document.getElementById("returnStreams");
         if (returnStreamsInput) {

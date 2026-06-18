@@ -1202,9 +1202,17 @@ function applyErdbToCustomCatalogMeta(meta, requestedType, config = null) {
         : "movie";
     const mediaIdOverride = meta.id || null;
 
-    const configuredPosterUrl = getConfiguredAssetUrl(config, "poster", imdbId, tmdbId, mediaIdOverride, mediaType);
-    const configuredBackdropUrl = getConfiguredAssetUrl(config, "backdrop", imdbId, tmdbId, mediaIdOverride, mediaType);
-    const configuredLogoUrl = getConfiguredAssetUrl(config, "logo", imdbId, tmdbId, mediaIdOverride, mediaType);
+    const assetIds = {
+        tvdbId: meta.tvdb_id || meta.tvdbId || null,
+        malId: meta.mal_id || meta.malId || null,
+        kitsuId: meta.kitsu_id || meta.kitsuId || null,
+        anilistId: meta.anilist_id || meta.anilistId || null,
+        anidbId: meta.anidb_id || meta.anidbId || null
+    };
+
+    const configuredPosterUrl = getConfiguredAssetUrl(config, "poster", imdbId, tmdbId, mediaIdOverride, mediaType, assetIds);
+    const configuredBackdropUrl = getConfiguredAssetUrl(config, "backdrop", imdbId, tmdbId, mediaIdOverride, mediaType, assetIds);
+    const configuredLogoUrl = getConfiguredAssetUrl(config, "logo", imdbId, tmdbId, mediaIdOverride, mediaType, assetIds);
 
     if (configuredPosterUrl) meta.poster = configuredPosterUrl;
     if (configuredBackdropUrl) meta.background = configuredBackdropUrl;
@@ -1896,16 +1904,97 @@ function buildErdbUrl(config, assetType, erdbId) {
     }
 }
 
-function getConfiguredAssetUrl(config, assetType, imdbId, tmdbId, mediaIdOverride = null, mediaType = null) {
+const CUSTOM_ASSET_PLACEHOLDER_PATTERN = /\{(id|imdb_id|tmdb_id|tvdb_id|mal_id|kitsu_id|anilist_id|anidb_id|type)\}/g;
+
+function normalizeCustomAssetTemplate(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    return raw;
+}
+
+function buildCustomAssetUrl(template, assetType, imdbId, tmdbId, mediaIdOverride, mediaType, ids = null) {
+    const tmpl = normalizeCustomAssetTemplate(template);
+    if (!tmpl) return null;
+
+    const idRegistry = ids && typeof ids === "object" ? ids : {};
+    const normalizedType = normalizeErdbMediaType(mediaType);
+    const primaryId = normalizeErdbId(mediaIdOverride) || imdbId || (tmdbId ? `tmdb:${tmdbId}` : null);
+
+    const values = {
+        id: primaryId || "",
+        imdb_id: normalizeImdbId(imdbId) || "",
+        tmdb_id: tmdbId ? String(tmdbId).trim() : "",
+        tvdb_id: idRegistry.tvdbId ? String(idRegistry.tvdbId).trim() : "",
+        mal_id: idRegistry.malId ? String(idRegistry.malId).trim() : "",
+        kitsu_id: idRegistry.kitsuId ? String(idRegistry.kitsuId).trim() : "",
+        anilist_id: idRegistry.anilistId ? String(idRegistry.anilistId).trim() : "",
+        anidb_id: idRegistry.anidbId ? String(idRegistry.anidbId).trim() : "",
+        type: normalizedType || ""
+    };
+
+    let missing = false;
+    const rendered = tmpl.replace(CUSTOM_ASSET_PLACEHOLDER_PATTERN, (match, key) => {
+        const value = values[key];
+        if (!value) {
+            missing = true;
+            return "";
+        }
+        return value;
+    });
+
+    if (missing) return null;
+
+    try {
+        return new URL(rendered).toString();
+    } catch (err) {
+        return rendered;
+    }
+}
+
+function getCustomAssetTemplate(config, assetType, isKitsu = false) {
+    const resolvedConfig = getRequestConfig(config);
+    if (!resolvedConfig || typeof resolvedConfig !== "object") return "";
+    const templatesKey = isKitsu ? "customKitsuAssetUrls" : "customAssetUrls";
+    const templates = resolvedConfig[templatesKey] && typeof resolvedConfig[templatesKey] === "object"
+        ? resolvedConfig[templatesKey]
+        : null;
+    if (!templates) return "";
+    return normalizeCustomAssetTemplate(templates[assetType]);
+}
+
+function getArtworkSourcePreference(config) {
+    const resolvedConfig = getRequestConfig(config);
+    if (!resolvedConfig || typeof resolvedConfig !== "object") return "auto";
+    const source = String(resolvedConfig.artworkSource || "").trim().toLowerCase();
+    if (source === "erdb" || source === "custom" || source === "none") return source;
+    return "auto";
+}
+
+function getConfiguredAssetUrl(config, assetType, imdbId, tmdbId, mediaIdOverride = null, mediaType = null, ids = null, isKitsu = false) {
     const resolvedConfig = getRequestConfig(config);
     if (!resolvedConfig || typeof resolvedConfig !== "object") return null;
 
-    const erdbConfig = getErdbConfig(resolvedConfig);
-    if (erdbConfig) {
-        if (!erdbConfig.enabledTypes[assetType]) return null;
-        const erdbId = resolveErdbMediaId(imdbId, tmdbId, mediaIdOverride, mediaType);
-        if (!erdbId) return null;
-        return buildErdbUrl(erdbConfig, assetType, erdbId);
+    const sourcePref = getArtworkSourcePreference(resolvedConfig);
+    if (sourcePref === "none") return null;
+
+    const allowCustom = sourcePref === "custom" || sourcePref === "auto";
+    const allowErdb = sourcePref === "erdb" || sourcePref === "auto";
+
+    if (allowCustom) {
+        const customTemplate = getCustomAssetTemplate(resolvedConfig, assetType, isKitsu);
+        if (customTemplate) {
+            return buildCustomAssetUrl(customTemplate, assetType, imdbId, tmdbId, mediaIdOverride, mediaType, ids);
+        }
+    }
+
+    if (allowErdb) {
+        const erdbConfig = getErdbConfig(resolvedConfig);
+        if (erdbConfig) {
+            if (!erdbConfig.enabledTypes[assetType]) return null;
+            const erdbId = resolveErdbMediaId(imdbId, tmdbId, mediaIdOverride, mediaType);
+            if (!erdbId) return null;
+            return buildErdbUrl(erdbConfig, assetType, erdbId);
+        }
     }
 
     return null;
@@ -2135,15 +2224,19 @@ async function enrichAndMapItems(results, stremioType, tmdbType, config = null, 
         }
 
         let posterUrl = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : null;
-        const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", imdbId, item.id, null, stremioType);
+        const assetIds = {
+            tvdbId: (details && details.external_ids && details.external_ids.tvdb_id) || null,
+            kitsuId: kitsuId || null
+        };
+        const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", imdbId, item.id, null, stremioType, assetIds);
         if (configuredPosterUrl) posterUrl = configuredPosterUrl;
 
         let backgroundUrl = item.backdrop_path ? `https://image.tmdb.org/t/p/original${item.backdrop_path}` : null;
-        const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", imdbId, item.id, null, stremioType);
+        const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", imdbId, item.id, null, stremioType, assetIds);
         if (configuredBackdropUrl) backgroundUrl = configuredBackdropUrl;
 
         let logoUrl = logo;
-        const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", imdbId, item.id, null, stremioType);
+        const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", imdbId, item.id, null, stremioType, assetIds);
         if (configuredLogoUrl) logoUrl = configuredLogoUrl;
 
         const metaId = kitsuId ? `kitsu:${kitsuId}` : (imdbId || `tmdb:${item.id}`);
@@ -4650,7 +4743,10 @@ async function buildTmdbSeriesVideosFromStandardSeasons(item, cinemetaMeta, conf
             const cinemetaThumb = cinemetaEpisodes[`${episode.season_number}:${episode.episode_number}`]?.thumbnail;
             const episodeNumber = shouldRenumber ? (index + 1) : episode.episode_number;
             const episodeMediaId = `${primaryMediaId}:${episode.season_number}:${episodeNumber}`;
-            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId, "series");
+            const episodeAssetIds = {
+                tvdbId: (item.external_ids && item.external_ids.tvdb_id) || null
+            };
+            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId, "series", episodeAssetIds);
             const fallbackThumbnail = episode.still_path
                 ? `https://image.tmdb.org/t/p/w500${episode.still_path}`
                 : (cinemetaThumb || fallbackBackdrop);
@@ -4733,7 +4829,10 @@ function buildTmdbSeriesVideosFromEpisodeGroup(item, episodeGroupDetails, cineme
                 : null;
             const episodeNumber = episodeIndex + 1;
             const episodeMediaId = `${primaryMediaId}:${seasonNumber}:${episodeNumber}`;
-            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId, "series");
+            const episodeAssetIds = {
+                tvdbId: (item.external_ids && item.external_ids.tvdb_id) || null
+            };
+            const configuredThumbnailUrl = getConfiguredAssetUrl(resolvedConfig, "thumbnail", imdbId, item.id, episodeMediaId, "series", episodeAssetIds);
             const fallbackThumbnail = episode && episode.still_path
                 ? `https://image.tmdb.org/t/p/w500${episode.still_path}`
                 : (cinemetaThumb || fallbackBackdrop);
@@ -5247,10 +5346,13 @@ async function enrichKitsuEpisodeVideosWithAnimeMapping(kitsuId, videos, tmdbDet
         const configuredKitsuThumbnailId = video && typeof video.id === "string" && video.id.startsWith("kitsu:")
             ? video.id
             : null;
+        const episodeAssetIds = {
+            kitsuId: normalizedKitsuId || null
+        };
         const configuredThumbnailUrl = configuredKitsuThumbnailId
-            ? getConfiguredAssetUrl(getRequestConfig(config), "thumbnail", imdbId, tmdbSeriesId, configuredKitsuThumbnailId, "series")
+            ? getConfiguredAssetUrl(getRequestConfig(config), "thumbnail", imdbId, tmdbSeriesId, configuredKitsuThumbnailId, "series", episodeAssetIds, true)
             : (episodeMediaId
-                ? getConfiguredAssetUrl(getRequestConfig(config), "thumbnail", imdbId, tmdbSeriesId, episodeMediaId, "series")
+                ? getConfiguredAssetUrl(getRequestConfig(config), "thumbnail", imdbId, tmdbSeriesId, episodeMediaId, "series", episodeAssetIds, true)
                 : null);
         const tmdbThumbnail = tmdbEpisode && tmdbEpisode.still_path
             ? `https://image.tmdb.org/t/p/w500${tmdbEpisode.still_path}`
@@ -5354,15 +5456,20 @@ function buildKitsuMetaFromPayload(kitsuId, payload, requestedType, config = nul
     const type = inferStremioTypeFromKitsuSubtype(attributes.subtype, requestedType || "series");
 
     let poster = getKitsuPoster(attributes);
-    const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", assetImdbId, assetTmdbId, metaId, type);
+    const assetIds = {
+        kitsuId: normalizedKitsuId || null,
+        malId: mappings.malId || null,
+        anilistId: mappings.anilistId || null
+    };
+    const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", assetImdbId, assetTmdbId, metaId, type, assetIds, true);
     if (configuredPosterUrl) poster = configuredPosterUrl;
 
     let background = getKitsuBackground(attributes);
-    const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", assetImdbId, assetTmdbId, metaId, type);
+    const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", assetImdbId, assetTmdbId, metaId, type, assetIds, true);
     if (configuredBackdropUrl) background = configuredBackdropUrl;
 
     let logo = "";
-    const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", assetImdbId, assetTmdbId, metaId, type);
+    const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", assetImdbId, assetTmdbId, metaId, type, assetIds, true);
     if (configuredLogoUrl) logo = configuredLogoUrl;
 
     const releaseInfo = attributes.startDate ? String(attributes.startDate).split("-")[0] : null;
@@ -5432,13 +5539,18 @@ async function buildKitsuMetaForPayload(kitsuId, payload, requestedType, config 
     const preferredSeasonDetails = requestedType === "series"
         ? await fetchPreferredKitsuSeasonDetails(normalizedKitsuId, config, tmdbDetails)
         : null;
+    const assetIds = {
+        kitsuId: normalizedKitsuId || null
+    };
     const configuredPosterUrl = getConfiguredAssetUrl(
         getRequestConfig(config),
         "poster",
         preferredPoster.imdbId,
         preferredPoster.tmdbId || (tmdbDetails && tmdbDetails.id ? String(tmdbDetails.id) : null),
         meta.id,
-        requestedType
+        requestedType,
+        assetIds,
+        true
     );
     const configuredBackdropUrl = getConfiguredAssetUrl(
         getRequestConfig(config),
@@ -5446,7 +5558,9 @@ async function buildKitsuMetaForPayload(kitsuId, payload, requestedType, config 
         preferredPoster.imdbId,
         preferredPoster.tmdbId || (tmdbDetails && tmdbDetails.id ? String(tmdbDetails.id) : null),
         meta.id,
-        requestedType
+        requestedType,
+        assetIds,
+        true
     );
     const configuredLogoUrl = getConfiguredAssetUrl(
         getRequestConfig(config),
@@ -5454,7 +5568,9 @@ async function buildKitsuMetaForPayload(kitsuId, payload, requestedType, config 
         preferredPoster.imdbId,
         preferredPoster.tmdbId || (tmdbDetails && tmdbDetails.id ? String(tmdbDetails.id) : null),
         meta.id,
-        requestedType
+        requestedType,
+        assetIds,
+        true
     );
     meta.poster = configuredPosterUrl || preferredPoster.poster || meta.poster;
     if (configuredBackdropUrl) meta.background = configuredBackdropUrl;
@@ -5540,8 +5656,11 @@ async function mapKitsuCatalogItemToMeta(item, forcedType = null, config = null,
     const releaseInfo = attributes.startDate ? String(attributes.startDate).split("-")[0] : null;
     const metaId = `kitsu:${item.id}`;
     const preferredPoster = await resolvePreferredKitsuPoster(item.id, type, config);
-    const configuredPosterUrl = getConfiguredAssetUrl(getRequestConfig(config), "poster", preferredPoster.imdbId, preferredPoster.tmdbId, metaId, type);
-    const configuredBackdropUrl = getConfiguredAssetUrl(getRequestConfig(config), "backdrop", preferredPoster.imdbId, preferredPoster.tmdbId, metaId, type);
+    const assetIds = {
+        kitsuId: item.id || null
+    };
+    const configuredPosterUrl = getConfiguredAssetUrl(getRequestConfig(config), "poster", preferredPoster.imdbId, preferredPoster.tmdbId, metaId, type, assetIds, true);
+    const configuredBackdropUrl = getConfiguredAssetUrl(getRequestConfig(config), "backdrop", preferredPoster.imdbId, preferredPoster.tmdbId, metaId, type, assetIds, true);
 
     return {
         id: metaId,
@@ -6612,15 +6731,19 @@ async function transformToMeta(item, type, config = null, options = {}) {
         fetchedImdbRating = cinemetaMeta && cinemetaMeta.imdbRating ? cinemetaMeta.imdbRating : null;
     }
 
+    const assetIds = {
+        tvdbId: (item.external_ids && item.external_ids.tvdb_id) || null
+    };
+
     let poster = item.poster_path ? `https://image.tmdb.org/t/p/w500${item.poster_path}` : "";
-    const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", imdbId, item.id, null, type);
+    const configuredPosterUrl = getConfiguredAssetUrl(resolvedConfig, "poster", imdbId, item.id, null, type, assetIds);
     if (configuredPosterUrl) poster = configuredPosterUrl;
 
-    const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", imdbId, item.id, null, type);
+    const configuredLogoUrl = getConfiguredAssetUrl(resolvedConfig, "logo", imdbId, item.id, null, type, assetIds);
     if (configuredLogoUrl) logo = configuredLogoUrl;
 
     let background = item.backdrop_path ? `https://image.tmdb.org/t/p/original${item.backdrop_path}` : "";
-    const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", imdbId, item.id, null, type);
+    const configuredBackdropUrl = getConfiguredAssetUrl(resolvedConfig, "backdrop", imdbId, item.id, null, type, assetIds);
     if (configuredBackdropUrl) background = configuredBackdropUrl;
 
     // Fetch Seasons and Episodes for Series
