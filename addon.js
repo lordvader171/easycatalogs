@@ -30,7 +30,14 @@ async function fetchWithRetry(url, options = {}) {
             const parsedUrl = new URL(url);
             const agent = parsedUrl.protocol === "https:" ? httpsAgent : httpAgent;
 
-            const headers = { "Accept-Encoding": "identity", ...(options.headers || {}) };
+            const isTmdbHost = parsedUrl.hostname.endsWith("themoviedb.org");
+            const headers = {
+                "Accept-Encoding": "identity",
+                ...(options.headers || {})
+            };
+            if (isTmdbHost) {
+                headers["Connection"] = "close";
+            }
 
             const response = await nodeFetch(url, {
                 agent,
