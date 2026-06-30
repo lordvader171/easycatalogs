@@ -7608,7 +7608,17 @@ app.get('/manifest.json', async (req, res) => {
                     }
                 }
             } else if (customProxyCatalogMap.has(lookupKey)) {
-                filteredCatalogs.push(customProxyCatalogMap.get(lookupKey));
+                const cat = customProxyCatalogMap.get(lookupKey);
+                const resolvedCatalog = applyConfiguredCatalogShape(
+                    applyConfiguredCatalogName(cat, lookupKey, customCatalogNames),
+                    lookupKey,
+                    customCatalogShapes
+                );
+                if (isDiscoverOnly && !isSearchCatalog(resolvedCatalog)) {
+                    filteredCatalogs.push(createDiscoverOnlyCatalog(resolvedCatalog));
+                } else {
+                    filteredCatalogs.push(resolvedCatalog);
+                }
             } else {
                 // Check for Streaming Catalogs
                 const matching = fullCatalogs.filter(c => {
@@ -7669,7 +7679,13 @@ app.get('/manifest.json', async (req, res) => {
     }
 
     if (!config.catalogs) {
-        filteredCatalogs.push(...customProxyCatalogs);
+        filteredCatalogs.push(...customProxyCatalogs.map(cat =>
+            applyConfiguredCatalogShape(
+                applyConfiguredCatalogName(cat, cat.id, customCatalogNames),
+                cat.id,
+                customCatalogShapes
+            )
+        ));
     }
 
     const manifest = { ...addonInterface.manifest };
