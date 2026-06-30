@@ -1163,16 +1163,17 @@ function buildExternalCatalogUrl(manifestUrl, type, catalogId, extra = {}) {
     const baseUrl = getAddonBaseUrl(manifestUrl);
     if (!baseUrl) return "";
 
-    const params = new URLSearchParams();
-    Object.entries(extra && typeof extra === "object" ? extra : {}).forEach(([key, value]) => {
-        if (value === undefined || value === null || value === "") return;
-        params.set(key, String(value));
-    });
+    const extraParts = Object.entries(extra && typeof extra === "object" ? extra : {})
+        .filter(([, value]) => value !== undefined && value !== null && value !== "")
+        .sort(([a], [b]) => a.localeCompare(b));
 
-    const query = params.toString();
+    const extraPath = extraParts.length
+        ? "/" + extraParts.map(([k, v]) => `${k}=${encodeURIComponent(String(v))}`).join("/")
+        : "";
+
     const encodedType = encodeURIComponent(String(type || "").trim());
     const encodedCatalogId = encodeURIComponent(String(catalogId || "").trim());
-    return `${baseUrl}/catalog/${encodedType}/${encodedCatalogId}.json${query ? `?${query}` : ""}`;
+    return `${baseUrl}/catalog/${encodedType}/${encodedCatalogId}${extraPath}.json`;
 }
 
 function getCustomMetaImdbId(meta) {
