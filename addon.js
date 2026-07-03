@@ -3211,14 +3211,137 @@ function extractEmbeddedJsonObject(html, marker) {
 
 function extractTop10ApolloState(html) {
     const jsonString = extractEmbeddedJsonObject(html, "window.__APOLLO_STATE__=");
-    if (!jsonString) return null;
+    if (jsonString) {
+        try {
+            const parsed = JSON.parse(jsonString);
+            if (parsed && typeof parsed === "object" && parsed.defaultClient && typeof parsed.defaultClient === "object") {
+                return parsed.defaultClient;
+            }
+            return parsed;
+        } catch (error) {
+        }
+    }
+
+    return extractTop10ApolloStateFromNuxt(html);
+}
+
+function extractTop10ApolloStateFromNuxt(html) {
+    const marker = 'id="__NUXT_DATA__">';
+    const markerIndex = html.indexOf(marker);
+    if (markerIndex === -1) return null;
+
+    const arrayStart = html.indexOf("[", markerIndex + marker.length);
+    if (arrayStart === -1) return null;
+
+    let depth = 1;
+    let inString = false;
+    let escaped = false;
+    let pos = arrayStart + 1;
+
+    while (pos < html.length && depth > 0) {
+        const ch = html[pos];
+        if (escaped) {
+            escaped = false;
+        } else if (inString && ch === "\\") {
+            escaped = true;
+        } else if (ch === '"') {
+            inString = !inString;
+        } else if (!inString) {
+            if (ch === "[") depth++;
+            else if (ch === "]") depth--;
+        }
+        pos++;
+    }
+
+    if (depth !== 0) return null;
 
     try {
-        const parsed = JSON.parse(jsonString);
-        if (parsed && typeof parsed === "object" && parsed.defaultClient && typeof parsed.defaultClient === "object") {
-            return parsed.defaultClient;
+        const dataArray = JSON.parse(html.slice(arrayStart, pos));
+        if (!Array.isArray(dataArray)) return null;
+
+        let apolloStateIndex = -1;
+        for (let i = 0; i < Math.min(dataArray.length, 30); i++) {
+            const entry = dataArray[i];
+            if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+                const refVal = entry["apollo:default"];
+                if (refVal !== undefined) {
+                    if (typeof refVal === "number" && refVal >= 0 && refVal < dataArray.length) {
+                        apolloStateIndex = refVal;
+                    } else if (Array.isArray(refVal) && refVal.length === 2 && refVal[0] === "ShallowReactive" && typeof refVal[1] === "number") {
+                        apolloStateIndex = refVal[1];
+                    }
+                    break;
+                }
+            }
         }
-        return parsed;
+
+        if (apolloStateIndex < 0) return null;
+
+        const rawState = dataArray[apolloStateIndex];
+        if (!rawState || typeof rawState !== "object") return null;
+
+        const resolvedCache = new Map();
+
+        const resolveValue = (value) => {
+            if (value === null || value === undefined) return value;
+
+            if (Array.isArray(value) && value.length === 2 && value[0] === "ShallowReactive" && typeof value[1] === "number") {
+                const cached = resolvedCache.get(value[1]);
+                if (cached !== undefined) return cached;
+                const resolved = resolveValue(dataArray[value[1]]);
+                resolvedCache.set(value[1], resolved);
+                return resolved;
+            }
+
+            if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < dataArray.length) {
+                const cached = resolvedCache.get(value);
+                if (cached !== undefined) return cached;
+                const resolved = resolveValue(dataArray[value]);
+                resolvedCache.set(value, resolved);
+                return resolved;
+            }
+
+            if (typeof value === "object" && !Array.isArray(value)) {
+                const result = {};
+                for (const key of Object.keys(value)) {
+                    result[key] = resolveValue(value[key]);
+                }
+                return result;
+            }
+
+            if (Array.isArray(value)) {
+                return value.map((item) => resolveValue(item));
+            }
+
+            return value;
+        };
+
+        const resolvedState = resolveValue(rawState);
+        if (!resolvedState || typeof resolvedState !== "object") return null;
+
+        const flat = {};
+        for (const key of Object.keys(resolvedState)) {
+            const value = resolvedState[key];
+            flat[key] = value;
+
+            if (key === "ROOT_QUERY" && value && typeof value === "object") {
+                for (const propKey of Object.keys(value)) {
+                    if (propKey !== "__typename") {
+                        flat[`$ROOT_QUERY.${propKey}`] = value[propKey];
+                    }
+                }
+            }
+
+            if ((key.startsWith("Show:") || key.startsWith("Movie:")) && value && typeof value === "object") {
+                for (const propKey of Object.keys(value)) {
+                    if (propKey.startsWith("content(") || propKey.startsWith("scoring(")) {
+                        flat[`$${key}.${propKey}`] = value[propKey];
+                    }
+                }
+            }
+        }
+
+        return flat;
     } catch (error) {
         return null;
     }
@@ -3415,7 +3538,9 @@ function extractTop10EntriesFromPopularTitles(state, options = {}) {
     edgeReferences.forEach((edgeReference, index) => {
         const edgeEntry = resolveTop10StateEntry(state, edgeReference);
         const nodeEntry = resolveTop10StateEntry(state, edgeEntry && edgeEntry.node);
-        if (!nodeEntry || nodeEntry.objectType !== objectType) return;
+        if (!nodeEntry) return;
+        const nodeType = String(nodeEntry.objectType || nodeEntry.__typename || "").toUpperCase();
+        if (nodeType !== objectType) return;
 
         const contentEntry = getTop10ContentEntry(state, nodeEntry);
         if (!contentEntry || !contentEntry.title) return;
@@ -3542,7 +3667,7 @@ function getTop10GraphqlContentSelection(includeExternalIds = false) {
         "posterUrl(format: JPG, profile: S166)"
     ];
     if (includeExternalIds) {
-        fields.push("externalIds { provider externalId }");
+        fields.push("externalIds { imdbId tmdbId }");
     }
     return fields.join("\n");
 }
