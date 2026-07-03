@@ -3281,36 +3281,53 @@ function extractTop10ApolloStateFromNuxt(html) {
         if (!rawState || typeof rawState !== "object") return null;
 
         const resolvedCache = new Map();
+        const resolving = new Set();
 
-        const resolveValue = (value) => {
+        const resolveValue = (value, depth = 0) => {
             if (value === null || value === undefined) return value;
+            if (depth > 30) return value;
 
             if (Array.isArray(value) && value.length === 2 && value[0] === "ShallowReactive" && typeof value[1] === "number") {
-                const cached = resolvedCache.get(value[1]);
+                const idx = value[1];
+                const cached = resolvedCache.get(idx);
                 if (cached !== undefined) return cached;
-                const resolved = resolveValue(dataArray[value[1]]);
-                resolvedCache.set(value[1], resolved);
-                return resolved;
+                if (resolving.has(idx)) return {};
+                resolving.add(idx);
+                const sentinel = {};
+                resolvedCache.set(idx, sentinel);
+                const resolved = resolveValue(dataArray[idx], depth + 1);
+                if (resolvedCache.get(idx) === sentinel) {
+                    resolvedCache.set(idx, resolved);
+                }
+                resolving.delete(idx);
+                return resolvedCache.get(idx);
             }
 
             if (typeof value === "number" && Number.isInteger(value) && value >= 0 && value < dataArray.length) {
                 const cached = resolvedCache.get(value);
                 if (cached !== undefined) return cached;
-                const resolved = resolveValue(dataArray[value]);
-                resolvedCache.set(value, resolved);
-                return resolved;
+                if (resolving.has(value)) return {};
+                resolving.add(value);
+                const sentinel = {};
+                resolvedCache.set(value, sentinel);
+                const resolved = resolveValue(dataArray[value], depth + 1);
+                if (resolvedCache.get(value) === sentinel) {
+                    resolvedCache.set(value, resolved);
+                }
+                resolving.delete(value);
+                return resolvedCache.get(value);
             }
 
             if (typeof value === "object" && !Array.isArray(value)) {
                 const result = {};
                 for (const key of Object.keys(value)) {
-                    result[key] = resolveValue(value[key]);
+                    result[key] = resolveValue(value[key], depth + 1);
                 }
                 return result;
             }
 
             if (Array.isArray(value)) {
-                return value.map((item) => resolveValue(item));
+                return value.map((item) => resolveValue(item, depth + 1));
             }
 
             return value;
