@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Python packages and pre-fetch Camoufox
-RUN pip3 install --no-cache-dir "scrapling[fetchers]" "curl_cffi" "camoufox[geoip]" pyautogui pygetwindow pyvirtualdisplay Pillow --break-system-packages && \
+RUN pip3 install --no-cache-dir "playwright==1.59.0" "scrapling[fetchers]" "curl_cffi" "camoufox[geoip]" pyautogui pygetwindow pyvirtualdisplay Pillow --break-system-packages && \
     python3 -m camoufox fetch
 
 
