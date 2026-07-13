@@ -100,7 +100,7 @@ def cmd_catalog(skip=0):
     skip = int(skip or 0)
     page = max(1, (skip // SITE_CATALOG_PAGE_SIZE) + 1)
     page_offset = skip % SITE_CATALOG_PAGE_SIZE
-    url = 'https://guardoserie.courses/turche/' if page == 1 else f'https://guardoserie.courses/turche/page/{page}/'
+    url = 'https://guardoserie.study/turche/' if page == 1 else f'https://guardoserie.study/turche/page/{page}/'
     html = fetch_page(url)
     series = parse_catalog(html)
     return {'ok': True, 'series': series[page_offset:page_offset + STREMIO_CATALOG_PAGE_SIZE], 'skip': skip, 'page': page}
@@ -138,7 +138,7 @@ def parse_series_meta(html, slug):
     return {'ok': True, 'title': title, 'description': description, 'poster': poster, 'genre': genre, 'year': '', 'seasons': seasons, 'slug': slug}
 
 def cmd_meta(slug):
-    html = fetch_page(f'https://guardoserie.courses/serie/{slug}/')
+    html = fetch_page(f'https://guardoserie.study/serie/{slug}/')
     return parse_series_meta(html, slug)
 
 def parse_episode(html):
