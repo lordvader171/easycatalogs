@@ -117,6 +117,14 @@ def solve_cloudflare_bypass(url):
                 page.evaluate("window.moveTo(0,0); window.resizeTo(1280, 720)")
                 page.set_default_timeout(60000)
                 
+                # Block ads and heavy resources to prevent Playwright crashes
+                page.route('**/*', lambda route: 
+                    route.abort() if route.request.resource_type in ['image', 'media', 'font'] or 
+                    any(x in route.request.url for x in ['adsco.re', 'popads', 'shinystat', 'exoclick', 'google-analytics', 'doubleclick', 'addthis'])
+                    else route.continue_()
+                )
+
+                
                 sess = load_session()
                 if sess and sess.get('cookies'):
                     cookie_str = sess.get('cookies')
