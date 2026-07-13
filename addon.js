@@ -197,9 +197,7 @@ function createScraper() {
     });
 
     proc.on('exit', (code, signal) => {
-        if (!proc.intentionalClose) {
-            console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
-        }
+        console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
         for (const p of pending.values()) p.reject(new Error('Guardoserie scraper exited'));
         pending.clear();
         if (guardoserieScraper && guardoserieScraper.proc === proc) {
@@ -321,7 +319,7 @@ async function findGuardoserieSlugForIds(imdbId, tmdbId, item = null) {
         }
     }
 
-    // console.log(`[Guardoserie] findSlug: imdb=${normalizedImdb} tmdb=${targetTmdb} titles=[${[...targetTitles].join(', ')}] slugVariants=[${[...slugVariants].join(', ')}] item.name="${item && item.name}" orig="${item && item.original_name}"`);
+    console.log(`[Guardoserie] findSlug: imdb=${normalizedImdb} tmdb=${targetTmdb} titles=[${[...targetTitles].join(', ')}] slugVariants=[${[...slugVariants].join(', ')}] item.name="${item && item.name}" orig="${item && item.original_name}"`);
 
     for (let page = 0; page < GUARDOSERIE_MAX_SCAN_PAGES; page++) {
         const seriesList = await getCachedGuardoserieCatalog(page * GUARDOSERIE_CATALOG_PAGE_SIZE);
@@ -372,10 +370,9 @@ function resetGuardoserieIdleTimeout() {
     }
     guardoserieIdleTimeout = setTimeout(() => {
         if (guardoserieScraper && !guardoserieBusy && guardoserieHighQueue.length === 0 && guardoserieLowQueue.length === 0) {
-            // console.log('[Guardoserie] Scraper is idle. Closing process to free memory...');
+            console.log('[Guardoserie] Scraper is idle. Closing process to free memory...');
             guardoserieScraper.send('close').catch(() => {}).finally(() => {
                 if (guardoserieScraper) {
-                    guardoserieScraper.proc.intentionalClose = true;
                     guardoserieScraper.kill();
                     guardoserieScraper = null;
                 }
@@ -441,12 +438,12 @@ function sendToGuardoserieLowPriority(action, params = {}, timeoutMs = 60000) {
 
 async function getGuardoserieMetaForTurkishSeries(item, primaryMediaId) {
     if (!isTurkishTmdbSeries(item)) {
-        // console.log(`[Guardoserie] Skipped: not Turkish lang=${item.original_language} country=${JSON.stringify(item.origin_country)}`);
+        console.log(`[Guardoserie] Skipped: not Turkish lang=${item.original_language} country=${JSON.stringify(item.origin_country)}`);
         return null;
     }
     const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id));
     const slug = await findGuardoserieSlugForIds(imdbId, item.id, item);
-    // console.log(`[Guardoserie] slug lookup: imdb=${imdbId} tmdb=${item.id} slug=${slug}`);
+    console.log(`[Guardoserie] slug lookup: imdb=${imdbId} tmdb=${item.id} slug=${slug}`);
     if (!slug) return null;
 
     try {
@@ -516,28 +513,28 @@ async function resolveTmdbItemForStreamId(type, baseId, config = null) {
 }
 
 async function fetchGuardoserieStreams(type, id, config = null) {
-    // console.log(`[Guardoserie] fetchGuardoserieStreams called: type=${type} id=${id}`);
+    console.log(`[Guardoserie] fetchGuardoserieStreams called: type=${type} id=${id}`);
     const parsed = parseSeriesEpisodeId(id);
     if (!parsed || type !== 'series' || !Number.isFinite(parsed.season) || !Number.isFinite(parsed.episode)) {
-        // console.log(`[Guardoserie] parseSeriesEpisodeId failed: id=${id} parsed=${JSON.stringify(parsed)}`);
+        console.log(`[Guardoserie] parseSeriesEpisodeId failed: id=${id} parsed=${JSON.stringify(parsed)}`);
         return [];
     }
 
     const item = await resolveTmdbItemForStreamId(type, parsed.baseId, config);
     const isTurkish = isTurkishTmdbSeries(item);
-    // console.log(`[Guardoserie] Stream check: id=${id} baseId=${parsed.baseId} season=${parsed.season} episode=${parsed.episode} turkish=${isTurkish}`);
+    console.log(`[Guardoserie] Stream check: id=${id} baseId=${parsed.baseId} season=${parsed.season} episode=${parsed.episode} turkish=${isTurkish}`);
     if (!isTurkish) return [];
 
     const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id) || parsed.baseId);
     const slug = await findGuardoserieSlugForIds(imdbId, item.id, item);
-    // console.log(`[Guardoserie] Stream slug lookup: imdbId=${imdbId} tmdbId=${item.id} slug=${slug}`);
+    console.log(`[Guardoserie] Stream slug lookup: imdbId=${imdbId} tmdbId=${item.id} slug=${slug}`);
     if (!slug) return [];
 
     const guardoserieMeta = await getGuardoserieMetaForTurkishSeries(item, parsed.baseId);
     const video = guardoserieMeta && Array.isArray(guardoserieMeta.videos)
         ? guardoserieMeta.videos.find(v => Number(v.season) === parsed.season && Number(v.episode) === parsed.episode)
         : null;
-    // console.log(`[Guardoserie] Stream video match: video=${video ? video.id : 'null'}`);
+    console.log(`[Guardoserie] Stream video match: video=${video ? video.id : 'null'}`);
     if (!video) return [];
 
     const metaResult = await cache.get(`guardoserie:meta:${slug}`);
@@ -547,15 +544,15 @@ async function fetchGuardoserieStreams(type, id, config = null) {
     const episode = season && Array.isArray(season.episodes)
         ? season.episodes.find(e => Number(e.id) === parsed.episode)
         : null;
-    // console.log(`[Guardoserie] Stream episode URL: slug=${slug} season=${parsed.season} ep=${parsed.episode} url=${episode ? episode.url : 'null'}`);
+    console.log(`[Guardoserie] Stream episode URL: slug=${slug} season=${parsed.season} ep=${parsed.episode} url=${episode ? episode.url : 'null'}`);
     if (!episode || !episode.url) return [];
 
     const iframe = await sendToGuardoserie('episode', { url: episode.url }, 45000);
-    // console.log(`[Guardoserie] Stream iframe: ok=${iframe && iframe.ok} iframe_url=${iframe ? iframe.iframe_url : 'null'}`);
+    console.log(`[Guardoserie] Stream iframe: ok=${iframe && iframe.ok} iframe_url=${iframe ? iframe.iframe_url : 'null'}`);
     if (!iframe || !iframe.ok || !iframe.iframe_url) return [];
 
     const raw = await extractLoadm(iframe.iframe_url, 'guardoserie.study');
-    // console.log(`[Guardoserie] Stream loadm: m3u8=${raw.length > 0 ? raw[0].url : 'none'}`);
+    console.log(`[Guardoserie] Stream loadm: m3u8=${raw.length > 0 ? raw[0].url : 'none'}`);
     if (!raw.length) return [];
 
     const seriesTitle = item.name || item.title || '';
@@ -581,7 +578,7 @@ async function fetchGuardoserieStreams(type, id, config = null) {
 async function warmupGuardoserie() {
     if (!GUARDOSERIE_WARMUP_ON_START || guardoserieWarmupRunning) return;
     guardoserieWarmupRunning = true;
-    // console.log(`[Guardoserie] Warmup start pages=${GUARDOSERIE_MAX_SCAN_PAGES} meta=${GUARDOSERIE_WARMUP_META} streams=false`);
+    console.log(`[Guardoserie] Warmup start pages=${GUARDOSERIE_MAX_SCAN_PAGES} meta=${GUARDOSERIE_WARMUP_META} streams=false`);
     try {
         startGuardoserieScraper();
         let pages = 0;
@@ -626,7 +623,7 @@ async function warmupGuardoserie() {
                                         if (sData && Array.isArray(sData.results) && sData.results.length > 0) {
                                             const found = sData.results[0];
                                             await cache.set(cacheKey, { slug }, 30 * 86400);
-                                            // console.log(`[Guardoserie] TMDB mapping: "${gName}" → slug=${slug} tmdb=${found.id} (${found.name})`);
+                                            console.log(`[Guardoserie] TMDB mapping: "${gName}" → slug=${slug} tmdb=${found.id} (${found.name})`);
                                             if (found.id) {
                                                 await cache.set(`guardoserie:slug:tmdb:${found.id}`, { slug }, 30 * 86400);
                                             }
@@ -636,13 +633,13 @@ async function warmupGuardoserie() {
                                                 const extData = await extRes.json();
                                                 if (extData && extData.imdb_id) {
                                                     await cache.set(`guardoserie:slug:imdb:${extData.imdb_id}`, { slug }, 30 * 86400);
-                                                    // console.log(`[Guardoserie] TMDB mapping: "${gName}" → imdb=${extData.imdb_id}`);
+                                                    console.log(`[Guardoserie] TMDB mapping: "${gName}" → imdb=${extData.imdb_id}`);
                                                 }
                                             } catch (e) {
                                                 console.warn(`[Guardoserie] Failed external_ids for ${found.id}: ${e.message}`);
                                             }
                                         } else {
-                                            // console.log(`[Guardoserie] TMDB no results: "${gName}" slug=${slug}`);
+                                            console.log(`[Guardoserie] TMDB no results: "${gName}" slug=${slug}`);
                                         }
                                     } catch (e) {
                                         console.warn(`[Guardoserie] TMDB search error for "${gName}": ${e.message}`);
@@ -657,7 +654,7 @@ async function warmupGuardoserie() {
             }
             if (seriesList.series.length < GUARDOSERIE_CATALOG_PAGE_SIZE) break;
         }
-        // console.log(`[Guardoserie] Warmup done pages=${pages} series=${seriesCount} meta=${metaCount}`);
+        console.log(`[Guardoserie] Warmup done pages=${pages} series=${seriesCount} meta=${metaCount}`);
         turkishMetaCacheVersion += 1;
     } finally {
         guardoserieWarmupRunning = false;
@@ -2691,7 +2688,7 @@ async function fetchTmdbPagedResults(endpoint, queryParams, options = {}) {
 
     while (true) {
         const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
-        // console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
+        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
@@ -2862,7 +2859,7 @@ async function fetchCatalogMetasForQuery({
 
     while (true) {
         const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
-        // console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
+        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
@@ -6630,14 +6627,14 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(async ({ type, id }) => {
     const config = getRequestConfig();
 
-    // console.log(`[Stream] Handler called: type=${type} id=${id} returnStreams=${config.returnStreams}`);
+    console.log(`[Stream] Handler called: type=${type} id=${id} returnStreams=${config.returnStreams}`);
 
     const normalizedId = String(id || "").trim();
     const isSupportedId = normalizedId.startsWith("kitsu:") ||
         normalizedId.startsWith("tmdb:") ||
         normalizedId.startsWith("tt");
     if (!isSupportedId) {
-        // console.log(`[Stream] Unsupported ID: ${normalizedId}`);
+        console.log(`[Stream] Unsupported ID: ${normalizedId}`);
         return { streams: [] };
     }
 
@@ -6649,7 +6646,7 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
 
         if (!shouldReturnStreams(config)) {
-            // console.log(`[Stream] Blocked by shouldReturnStreams`);
+            console.log(`[Stream] Blocked by shouldReturnStreams`);
             return { streams: [] };
         }
 
@@ -6786,7 +6783,7 @@ async function fetchSpecialSeriesCatalogMetas(catalogId, extra = {}, config = nu
 
 // Metadata Handler
 builder.defineMetaHandler(async ({ type, id }) => {
-    // console.log(`[Easy Catalogs] Meta Request: type=${type} id=${id}`);
+    console.log(`[Easy Catalogs] Meta Request: type=${type} id=${id}`);
 
     const config = getRequestConfig();
     const meta = await getCachedMetaForId(type, id, config);
@@ -7012,7 +7009,7 @@ async function transformToMeta(item, type, config = null, options = {}) {
 // The builder freezes the manifest, but let's check if we can modify the array content later via interface
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    // console.log(`[Easy Catalogs] Request: type=${type} id=${id} extra=${JSON.stringify(extra)}`);
+    console.log(`[Easy Catalogs] Request: type=${type} id=${id} extra=${JSON.stringify(extra)}`);
     const sourceCatalogId = String(id || "").trim();
 
     // Convert Stremio type to TMDB type
@@ -7139,7 +7136,7 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                 const orderedMetas = isAnimeSearch
                     ? sortMetasByReleaseDesc(metas)
                     : metas;
-                // console.log(`[Easy Catalogs] Search debug: query="${query}" type=${type} catalog=${sourceCatalogId} results=${results.length} metas=${metas.length}`);
+                console.log(`[Easy Catalogs] Search debug: query="${query}" type=${type} catalog=${sourceCatalogId} results=${results.length} metas=${metas.length}`);
                 return { metas: applyLandscapeToMetas(orderedMetas, landscapeForCatalog, config) };
 
             } catch (e) {
