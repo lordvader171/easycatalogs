@@ -1,84 +1,259 @@
-import sys, json, time, re
-from scrapling.fetchers import StealthySession
+import sys, json, time, re, os
+import requests
 from scrapling.parser import Selector
-
-session = None
-browser_cookies_loaded = False
-saved_cookies = []
-fetch_count = 0
-MAX_FETCHES_PER_SESSION = 25
 
 STREMIO_CATALOG_PAGE_SIZE = 20
 SITE_CATALOG_PAGE_SIZE = 40
+
+SCRAPER_DIR = os.path.dirname(os.path.abspath(__file__))
+SESSION_FILE = os.path.join(SCRAPER_DIR, 'cf-session-guardoserie.json')
 
 def log(message):
     sys.stderr.write(message + '\n')
     sys.stderr.flush()
 
-def get_session():
-    global session, browser_cookies_loaded, fetch_count
-    if session is not None and fetch_count >= MAX_FETCHES_PER_SESSION:
-        log(f'[Guardoserie] Session reached {fetch_count} fetches. Restarting session to free memory...')
+def load_session():
+    if os.path.exists(SESSION_FILE):
         try:
-            session.close()
+            with open(SESSION_FILE, 'r', encoding='utf-8') as f:
+                return json.load(f)
         except Exception as e:
-            log(f'[Guardoserie] Error closing session: {e}')
-        session = None
-        fetch_count = 0
+            log(f'[Guardoserie] Error loading session: {e}')
+    return None
 
-    if session is None:
-        session = StealthySession(headless=True, solve_cloudflare=False)
-        session.start()
-        browser_cookies_loaded = False
-    if not browser_cookies_loaded and saved_cookies:
-        try:
-            session.context.add_cookies(saved_cookies)
-            browser_cookies_loaded = True
-            log('[Guardoserie] Loaded cookies into browser context')
-        except Exception as e:
-            log(f'[Guardoserie] Cookie load failed: {e}')
-    return session
-
-def save_browser_cookies():
-    global saved_cookies
-    if session and session.context:
-        saved_cookies = session.context.cookies()
+def save_session(data):
+    try:
+        with open(SESSION_FILE, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2)
+    except Exception as e:
+        log(f'[Guardoserie] Error saving session: {e}')
 
 def is_cloudflare_challenge(html):
-    return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
+    if not html:
+        return True
+    challenge_titles = [
+        "just a moment", "ci siamo quasi", "attention required",
+        "un instant", "un moment", "einen moment", "un momento",
+        "só um momento", "um momento", "cf-challenge", "challenge-platform"
+    ]
+    html_lower = html.lower()
+    return any(m in html_lower for m in challenge_titles)
 
-def scrapling_fetch_page(url, solve_cloudflare=False):
-    global fetch_count
-    log(f'[Guardoserie] Fetch {url} solve_cf={solve_cloudflare}')
-    s = get_session()
-    result = [None]
-    def action(page):
-        time.sleep(2 if solve_cloudflare else 0.1)
-        result[0] = page.content()
+def tab_space_os(page):
+    try:
+        if os.name == "nt":
+            import pyautogui, pygetwindow as gw
+            w = None
+            for ww in gw.getAllWindows():
+                try:
+                    if "camoufox" in (ww.title or "").lower() and ww.visible:
+                        w = ww; break
+                except: pass
+            if not w:
+                for ww in gw.getWindowsWithTitle("Camoufox"):
+                    if ww.visible: w = ww; break
+            if not w: return False
+            w.activate()
+            time.sleep(0.3)
+            pyautogui.press("tab"); time.sleep(0.3)
+            pyautogui.press("space")
+        else:
+            import subprocess
+            wid = None
+            r = subprocess.run(["xdotool","search","--name","Camoufox"],
+                               capture_output=True,text=True,timeout=10)
+            if r.stdout.strip():
+                wid = r.stdout.strip().split("\n")[0]
+            else:
+                r2 = subprocess.run(["xdotool","search","--class","Firefox"],
+                                    capture_output=True,text=True,timeout=10)
+                if r2.stdout.strip():
+                    wid = r2.stdout.strip().split("\n")[0]
+            if not wid:
+                sys.stderr.write(f"tab_space: finestra non trovata\n")
+                return False
+            sys.stderr.write(f"tab_space: finestra {wid}, focus + 3xTab+Space via pyautogui...\n")
+            subprocess.run(["xdotool","windowfocus","--sync",wid], timeout=10)
+            time.sleep(0.3)
+            subprocess.run(["xauth","add",os.environ.get("DISPLAY",":99"),
+                           ".","ffffffffffffffffffffffffffffffff"],
+                           capture_output=True, timeout=5)
+            import pyautogui
+            pyautogui.press("tab"); time.sleep(0.3)
+            pyautogui.press("space")
+        return True
+    except Exception as ex:
+        sys.stderr.write(f"tab_space errore: {ex}\n")
+        return False
+
+def solve_cloudflare_bypass(url):
+    log(f'[Guardoserie] Running Camoufox bypass for: {url}')
+    from playwright.sync_api import sync_playwright
+    from camoufox.utils import launch_options as _cf_lo
+    import tempfile
     
-    fetch_count += 1
-    s.fetch(
-        url,
-        google_search=False,
-        page_action=action,
-        network_idle=solve_cloudflare,
-        load_dom=solve_cloudflare,
-        wait=3000 if solve_cloudflare else 100,
-        disable_resources=not solve_cloudflare,
-        timeout=30000 if solve_cloudflare else 30000,
-        solve_cloudflare=solve_cloudflare
-    )
-    save_browser_cookies()
-    return result[0]
+    display = None
+    if os.name != "nt":
+        try:
+            from pyvirtualdisplay import Display
+            display = Display(visible=0, size=(1920, 1080))
+            display.start()
+            import subprocess
+            subprocess.Popen(["fluxbox"], env={**os.environ}, stderr=subprocess.DEVNULL)
+            time.sleep(1)
+        except Exception as e:
+            sys.stderr.write(f"Failed to start pyvirtualdisplay/fluxbox: {e}\n")
+
+    try:
+        kw = {"headless": False, "humanize": True, "locale": "it-IT", "geoip": True}
+        _lo = _cf_lo(**kw)
+        _td = os.path.join(tempfile.gettempdir(), "camoufox_ctx_guardoserie")
+        os.makedirs(_td, exist_ok=True)
+        
+        with sync_playwright() as pw:
+            ctx = pw.firefox.launch_persistent_context(_td, no_viewport=True, **_lo)
+            try:
+                page = ctx.new_page()
+                page.evaluate("window.moveTo(0,0); window.resizeTo(1280, 720)")
+                page.set_default_timeout(60000)
+                
+                sess = load_session()
+                if sess and sess.get('cookies'):
+                    cookie_str = sess.get('cookies')
+                    playwright_cookies = []
+                    for item in cookie_str.split(';'):
+                        if '=' in item:
+                            k, v = item.strip().split('=', 1)
+                            from urllib.parse import urlparse
+                            domain = urlparse(url).hostname
+                            playwright_cookies.append({
+                                'name': k,
+                                'value': v,
+                                'domain': domain,
+                                'path': '/'
+                            })
+                    try:
+                        ctx.add_cookies(playwright_cookies)
+                    except Exception as ce:
+                        log(f'[Guardoserie] Error adding existing cookies to bypass ctx: {ce}')
+
+                page.goto(url, wait_until="domcontentloaded")
+                
+                challenge_titles = ["just a moment", "ci siamo quasi", "attention required",
+                    "un instant", "un moment", "einen moment", "un momento",
+                    "só um momento", "um momento"]
+
+                def is_ch(t):
+                    return t and any(m in t.lower() for m in challenge_titles)
+
+                def safe_title(p):
+                    try: return p.title()
+                    except: return ""
+
+                bypass_start = time.time()
+                max_wait = 90
+                bypassed = False
+                
+                time.sleep(12)
+                
+                while time.time() - bypass_start < max_wait:
+                    try:
+                        page.wait_for_load_state("domcontentloaded", timeout=8000)
+                    except: pass
+                    t = safe_title(page)
+                    log(f'[Guardoserie] bypass loop: title={t!r} bypassed={bypassed}')
+                    if not is_ch(t):
+                        if bypassed:
+                            time.sleep(2)
+                            t2 = safe_title(page)
+                            if not is_ch(t2):
+                                log('[Guardoserie] bypass stable')
+                                break
+                        else:
+                            bypassed = True
+                            continue
+                    
+                    if not tab_space_os(page):
+                        time.sleep(3)
+                        continue
+                    time.sleep(3)
+                
+                html = page.content()
+                current_url = page.url
+                
+                cookies_list = []
+                try:
+                    for c in ctx.cookies():
+                        cookies_list.append({k: c.get(k) for k in ("name","value","domain","path","httpOnly","secure")})
+                        if "expires" in c: cookies_list[-1]["expiry"] = c["expires"]
+                except Exception as ce:
+                    log(f'[Guardoserie] Error getting cookies: {ce}')
+                
+                ua = page.evaluate("navigator.userAgent")
+                
+                cookies_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies_list if c.get('name') and c.get('value')])
+                cookie_domains = list(set([c.get('domain') for c in cookies_list if c.get('domain')]))
+                
+                session_data = {
+                    "userAgent": ua,
+                    "cookies": cookies_str,
+                    "url": current_url,
+                    "cookieDomains": cookie_domains,
+                    "timestamp": int(time.time() * 1000)
+                }
+                save_session(session_data)
+                log('[Guardoserie] Cloudflare bypass successfully completed and session saved.')
+                return html
+            finally:
+                try: ctx.close()
+                except: pass
+    finally:
+        if display:
+            try: display.stop()
+            except: pass
+    return None
+
+def http_fetch(url):
+    sess = load_session()
+    cookies = {}
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    
+    if sess:
+        ua = sess.get('userAgent', ua)
+        cookie_str = sess.get('cookies', '')
+        if cookie_str:
+            for item in cookie_str.split(';'):
+                if '=' in item:
+                    k, v = item.strip().split('=', 1)
+                    cookies[k] = v
+
+    headers = {
+        'User-Agent': ua,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+        'Accept-Language': 'it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7',
+    }
+    
+    try:
+        r = requests.get(url, headers=headers, cookies=cookies, timeout=15)
+        if r.status_code in (403, 503) or is_cloudflare_challenge(r.text):
+            log(f'[Guardoserie] Cloudflare challenge detected (Status {r.status_code})')
+            return None
+        return r.text
+    except Exception as e:
+        log(f'[Guardoserie] HTTP fetch error: {e}')
+        return None
 
 def fetch_page(url):
-    html = scrapling_fetch_page(url, solve_cloudflare=False)
-    log(f'[Guardoserie] fetch_page (cf=False): len={len(html) if html else 0} challenge={is_cloudflare_challenge(html) if html else "N/A"}')
-    if html and len(html) > 500 and not is_cloudflare_challenge(html):
+    html = http_fetch(url)
+    if html:
         return html
-    html2 = scrapling_fetch_page(url, solve_cloudflare=True)
-    log(f'[Guardoserie] fetch_page (cf=True): len={len(html2) if html2 else 0} challenge={is_cloudflare_challenge(html2) if html2 else "N/A"}')
+    
+    html2 = solve_cloudflare_bypass(url)
+    if html2 and not is_cloudflare_challenge(html2):
+        return html2
+        
     return html2
+
 
 def parse_catalog(html):
     doc = Selector(html)
@@ -154,15 +329,8 @@ def cmd_episode(url):
     return parse_episode(html)
 
 def cmd_close():
-    global session, browser_cookies_loaded
-    if session:
-        try:
-            session.close()
-        except Exception:
-            pass
-    session = None
-    browser_cookies_loaded = False
     return {'ok': True}
+
 
 if __name__ == '__main__':
     while True:
