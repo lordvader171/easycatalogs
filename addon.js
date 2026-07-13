@@ -197,7 +197,9 @@ function createScraper() {
     });
 
     proc.on('exit', (code, signal) => {
-        console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
+        if (!proc.intentionalClose) {
+            console.error(`[Guardoserie] Scraper exited code=${code} signal=${signal}`);
+        }
         for (const p of pending.values()) p.reject(new Error('Guardoserie scraper exited'));
         pending.clear();
         if (guardoserieScraper && guardoserieScraper.proc === proc) {
@@ -373,6 +375,7 @@ function resetGuardoserieIdleTimeout() {
             // console.log('[Guardoserie] Scraper is idle. Closing process to free memory...');
             guardoserieScraper.send('close').catch(() => {}).finally(() => {
                 if (guardoserieScraper) {
+                    guardoserieScraper.proc.intentionalClose = true;
                     guardoserieScraper.kill();
                     guardoserieScraper = null;
                 }

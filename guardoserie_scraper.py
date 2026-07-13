@@ -137,7 +137,7 @@ def solve_cloudflare_bypass(url):
                     except Exception as ce:
                         log(f'[Guardoserie] Error adding existing cookies to bypass ctx: {ce}')
 
-                page.goto(url, wait_until="domcontentloaded")
+                page.goto(url, wait_until="commit")
                 
                 challenge_titles = ["just a moment", "ci siamo quasi", "attention required",
                     "un instant", "un moment", "einen moment", "un momento",
