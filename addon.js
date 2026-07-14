@@ -515,7 +515,6 @@ async function fetchGuardoserieStreams(type, id, config = null) {
     console.log(`[Guardoserie] fetchGuardoserieStreams called: type=${type} id=${id}`);
     const parsed = parseSeriesEpisodeId(id);
     if (!parsed || type !== 'series' || !Number.isFinite(parsed.season) || !Number.isFinite(parsed.episode)) {
-        console.log(`[Guardoserie] parseSeriesEpisodeId failed: id=${id} parsed=${JSON.stringify(parsed)}`);
         return [];
     }
 
