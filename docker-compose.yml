@@ -18,7 +18,11 @@ services:
     restart: unless-stopped
     shm_size: 1gb
     environment:
+      - REDIS_URL=redis://redis:6379
       - BROWSER_POOL_SIZE=2
+    depends_on:
+      redis:
+        condition: service_healthy
 
   easy-catalogs:
     build: .
