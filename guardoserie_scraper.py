@@ -29,7 +29,20 @@ def fetch_page(url):
             resp_data = json.loads(response.read().decode('utf-8'))
             status_code = resp_data.get('statusCode')
             html = resp_data.get('html', '')
-            if status_code == 200 or (status_code is None and resp_data.get('status') == 'ok'):
+            
+            # Convert status code to int if possible to handle redirects (301, 302)
+            try:
+                status_int = int(status_code)
+            except (TypeError, ValueError):
+                status_int = status_code
+
+            is_success = False
+            if isinstance(status_int, int):
+                is_success = 200 <= status_int < 400
+            else:
+                is_success = resp_data.get('status') == 'ok'
+
+            if is_success:
                 if not html and 'solution' in resp_data:
                     html = resp_data.get('solution', {}).get('response', '')
                 log(f'[Guardoserie] Trawl success: len={len(html)}')
