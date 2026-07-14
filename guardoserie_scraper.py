@@ -27,12 +27,15 @@ def fetch_page(url):
         )
         with urllib.request.urlopen(req, timeout=65) as response:
             resp_data = json.loads(response.read().decode('utf-8'))
-            if resp_data.get('status') == 'ok':
-                html = resp_data.get('solution', {}).get('response', '')
-                log(f'[Guardoserie] Trawl success: len={len(html) if html else 0}')
+            status_code = resp_data.get('statusCode')
+            html = resp_data.get('html', '')
+            if status_code == 200 or (status_code is None and resp_data.get('status') == 'ok'):
+                if not html and 'solution' in resp_data:
+                    html = resp_data.get('solution', {}).get('response', '')
+                log(f'[Guardoserie] Trawl success: len={len(html)}')
                 return html
             else:
-                log(f"[Guardoserie] Trawl error response: {resp_data}")
+                log(f"[Guardoserie] Trawl error response: status={status_code} data={resp_data}")
     except Exception as e:
         log(f"[Guardoserie] Trawl request failed to {url}: {e}")
     return ""
