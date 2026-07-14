@@ -3,7 +3,7 @@ import urllib.request
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-TRAWL_URL = os.environ.get('TRAWL_URL', 'http://localhost:8191')
+FLARESOLVERR_URL = os.environ.get('FLARESOLVERR_URL', 'http://localhost:8191')
 
 STREMIO_CATALOG_PAGE_SIZE = 20
 SITE_CATALOG_PAGE_SIZE = 40
@@ -94,11 +94,12 @@ def fetch_page(url):
                 else:
                     log(f'[Guardoserie] Direct fetch attempt {attempt} failed: {e}')
 
-        # 2. Fallback: Fetch via Trawl to solve challenge and get new cookies
-        log(f'[Guardoserie] Fetch via Trawl: {url}')
+        # 2. Fallback: Fetch via FlareSolverr to solve challenge and get new cookies
+        log(f'[Guardoserie] Fetch via FlareSolverr: {url}')
         try:
-            req_url = f"{TRAWL_URL.rstrip('/')}/scrape"
+            req_url = f"{FLARESOLVERR_URL.rstrip('/')}/v1"
             data = {
+                "cmd": "request.get",
                 "url": url,
                 "maxTimeout": 80000
             }
@@ -110,41 +111,30 @@ def fetch_page(url):
             )
             with urllib.request.urlopen(req, timeout=85) as response:
                 resp_data = json.loads(response.read().decode('utf-8'))
-                status_code = resp_data.get('statusCode')
-                html = resp_data.get('html', '')
                 
-                try:
-                    status_int = int(status_code)
-                except (TypeError, ValueError):
-                    status_int = status_code
-
-                is_success = False
-                if isinstance(status_int, int):
-                    is_success = 200 <= status_int < 400
-                else:
-                    is_success = resp_data.get('status') == 'ok'
+                is_success = resp_data.get('status') == 'ok'
+                solution = resp_data.get('solution', {})
+                html = solution.get('response', '')
+                status_code = solution.get('status', 200)
 
                 if is_success:
-                    if not html and 'solution' in resp_data:
-                        html = resp_data.get('solution', {}).get('response', '')
-                    
-                    # Cache the updated cookies and User-Agent
-                    cookies_list = resp_data.get('cookies', [])
+                    # Cache the updated cookies and User-Agent from FlareSolverr solution
+                    cookies_list = solution.get('cookies', [])
                     if cookies_list:
                         cached_cookies = {c['name']: c['value'] for c in cookies_list}
-                        cached_user_agent = resp_data.get('userAgent', '')
+                        cached_user_agent = solution.get('userAgent', '')
                         log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
                         save_cookie_cache()
                     
                     if not is_cloudflare_challenge(html):
-                        log(f'[Guardoserie] Trawl success on attempt {attempt}: len={len(html)}')
+                        log(f'[Guardoserie] FlareSolverr success on attempt {attempt}: status={status_code} len={len(html)}')
                         return html
                     else:
-                        log(f'[Guardoserie] Trawl on attempt {attempt} returned challenge page: len={len(html)}')
+                        log(f'[Guardoserie] FlareSolverr on attempt {attempt} returned challenge page: len={len(html)}')
                 else:
-                    log(f"[Guardoserie] Trawl error response: status={status_code} data={resp_data}")
+                    log(f"[Guardoserie] FlareSolverr error response: {resp_data}")
         except Exception as e:
-            log(f"[Guardoserie] Trawl request failed on attempt {attempt}: {e}")
+            log(f"[Guardoserie] FlareSolverr request failed on attempt {attempt}: {e}")
         
         # If we got a challenge or failed, wait 2.5 seconds before retrying
         if attempt < 3:
