@@ -520,7 +520,6 @@ async function fetchGuardoserieStreams(type, id, config = null) {
 
     const item = await resolveTmdbItemForStreamId(type, parsed.baseId, config);
     const isTurkish = isTurkishTmdbSeries(item);
-    console.log(`[Guardoserie] Stream check: id=${id} baseId=${parsed.baseId} season=${parsed.season} episode=${parsed.episode} turkish=${isTurkish}`);
     if (!isTurkish) return [];
 
     const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id) || parsed.baseId);
