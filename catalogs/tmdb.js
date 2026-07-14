@@ -127,7 +127,6 @@ const SLUG_TO_PROVIDER = {
 };
 function getCatalog(type, id, filters) {
   return __async(this, null, function* () {
-    console.log(`[TMDB] getCatalog type=${type} id=${id} filters=${JSON.stringify(filters)}`);
     try {
       let endpoint = null;
       let queryParams = `api_key=${TMDB_API_KEY}&language=it-IT`;

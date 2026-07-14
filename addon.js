@@ -2688,7 +2688,6 @@ async function fetchTmdbPagedResults(endpoint, queryParams, options = {}) {
 
     while (true) {
         const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
-        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
@@ -2859,7 +2858,6 @@ async function fetchCatalogMetasForQuery({
 
     while (true) {
         const currentUrl = `${BASE_URL}/${endpoint}?${queryParams}&page=${page}`;
-        console.log(`[Easy Catalogs] Fetching Page ${page}: ${currentUrl}`);
 
         try {
             const response = await fetch(currentUrl);
@@ -6627,14 +6625,11 @@ const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(async ({ type, id }) => {
     const config = getRequestConfig();
 
-    console.log(`[Stream] Handler called: type=${type} id=${id} returnStreams=${config.returnStreams}`);
-
     const normalizedId = String(id || "").trim();
     const isSupportedId = normalizedId.startsWith("kitsu:") ||
         normalizedId.startsWith("tmdb:") ||
         normalizedId.startsWith("tt");
     if (!isSupportedId) {
-        console.log(`[Stream] Unsupported ID: ${normalizedId}`);
         return { streams: [] };
     }
 
@@ -6646,7 +6641,6 @@ builder.defineStreamHandler(async ({ type, id }) => {
         }
 
         if (!shouldReturnStreams(config)) {
-            console.log(`[Stream] Blocked by shouldReturnStreams`);
             return { streams: [] };
         }
 
@@ -6783,8 +6777,6 @@ async function fetchSpecialSeriesCatalogMetas(catalogId, extra = {}, config = nu
 
 // Metadata Handler
 builder.defineMetaHandler(async ({ type, id }) => {
-    console.log(`[Easy Catalogs] Meta Request: type=${type} id=${id}`);
-
     const config = getRequestConfig();
     const meta = await getCachedMetaForId(type, id, config);
     return meta ? { meta } : { meta: {} };
@@ -7009,7 +7001,6 @@ async function transformToMeta(item, type, config = null, options = {}) {
 // The builder freezes the manifest, but let's check if we can modify the array content later via interface
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
-    console.log(`[Easy Catalogs] Request: type=${type} id=${id} extra=${JSON.stringify(extra)}`);
     const sourceCatalogId = String(id || "").trim();
 
     // Convert Stremio type to TMDB type
@@ -7136,7 +7127,6 @@ builder.defineCatalogHandler(async ({ type, id, extra }) => {
                 const orderedMetas = isAnimeSearch
                     ? sortMetasByReleaseDesc(metas)
                     : metas;
-                console.log(`[Easy Catalogs] Search debug: query="${query}" type=${type} catalog=${sourceCatalogId} results=${results.length} metas=${metas.length}`);
                 return { metas: applyLandscapeToMetas(orderedMetas, landscapeForCatalog, config) };
 
             } catch (e) {
@@ -7845,7 +7835,6 @@ app.use(addonRouter);
 try {
     addonInterface.manifest.catalogs.length = 0; // Clear it
     fullCatalogs.forEach(c => addonInterface.manifest.catalogs.push(c)); // Push full list
-    console.log("[Easy Catalogs] Successfully injected full catalogs list.");
 } catch (e) {
     console.error("[Easy Catalogs] Failed to inject catalogs:", e);
 }
