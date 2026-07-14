@@ -69,7 +69,7 @@ def fetch_page(url):
                 headers=headers,
                 cookies=cached_cookies,
                 impersonate="firefox",
-                timeout=15
+                timeout=30
             )
             html = response.text
             status = response.status_code
