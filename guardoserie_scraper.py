@@ -79,7 +79,7 @@ def fetch_page(url):
                     headers=headers,
                     cookies=cached_cookies,
                     impersonate="firefox",
-                    timeout=10
+                    timeout=15
                 )
                 html = response.text
                 status = response.status_code
@@ -89,7 +89,10 @@ def fetch_page(url):
                 else:
                     log(f'[Guardoserie] Direct fetch on attempt {attempt} failed or got challenge: status={status} len={len(html) if html else 0}')
             except Exception as e:
-                log(f'[Guardoserie] Direct fetch attempt {attempt} exception: {e}')
+                if "timed out" in str(e).lower() or "timeout" in str(e).lower():
+                    log(f'[Guardoserie] Direct fetch attempt {attempt} timed out (expected Cloudflare block)')
+                else:
+                    log(f'[Guardoserie] Direct fetch attempt {attempt} failed: {e}')
 
         # 2. Fallback: Fetch via Trawl to solve challenge and get new cookies
         log(f'[Guardoserie] Fetch via Trawl: {url}')
