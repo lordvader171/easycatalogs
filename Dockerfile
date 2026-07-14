@@ -7,8 +7,8 @@ RUN apt-get update && apt-get install -y \
     python3 python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# Install BeautifulSoup4
-RUN pip3 install beautifulsoup4 --break-system-packages
+# Install BeautifulSoup4 and curl_cffi
+RUN pip3 install beautifulsoup4 curl_cffi --break-system-packages
 
 # Copy package files first for better caching
 COPY package*.json ./

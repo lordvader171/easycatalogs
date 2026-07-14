@@ -1,17 +1,50 @@
 import sys, json, time, re, os
 import urllib.request
 from bs4 import BeautifulSoup
+from curl_cffi import requests
 
 TRAWL_URL = os.environ.get('TRAWL_URL', 'http://localhost:8191')
 
 STREMIO_CATALOG_PAGE_SIZE = 20
 SITE_CATALOG_PAGE_SIZE = 40
 
+# Global cookie and User-Agent cache in memory
+cached_cookies = {}
+cached_user_agent = ""
+
 def log(message):
     sys.stderr.write(message + '\n')
     sys.stderr.flush()
 
+def is_cloudflare_challenge(html):
+    return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
+
 def fetch_page(url):
+    global cached_cookies, cached_user_agent
+
+    # 1. Try direct fetch via curl_cffi with cached cookies
+    if cached_cookies and cached_user_agent:
+        try:
+            log(f'[Guardoserie] Fetching directly via curl_cffi: {url}')
+            headers = {"User-Agent": cached_user_agent}
+            response = requests.get(
+                url,
+                headers=headers,
+                cookies=cached_cookies,
+                impersonate="firefox",
+                timeout=15
+            )
+            html = response.text
+            status = response.status_code
+            if (200 <= status < 400) and not is_cloudflare_challenge(html):
+                log(f'[Guardoserie] Direct fetch success: status={status} len={len(html)}')
+                return html
+            else:
+                log(f'[Guardoserie] Direct fetch failed/got challenge: status={status} len={len(html) if html else 0}')
+        except Exception as e:
+            log(f'[Guardoserie] Direct fetch exception: {e}')
+
+    # 2. Fallback: Fetch via Trawl to solve challenge and get new cookies
     log(f'[Guardoserie] Fetch via Trawl: {url}')
     try:
         req_url = f"{TRAWL_URL.rstrip('/')}/scrape"
@@ -30,7 +63,6 @@ def fetch_page(url):
             status_code = resp_data.get('statusCode')
             html = resp_data.get('html', '')
             
-            # Convert status code to int if possible to handle redirects (301, 302)
             try:
                 status_int = int(status_code)
             except (TypeError, ValueError):
@@ -45,6 +77,14 @@ def fetch_page(url):
             if is_success:
                 if not html and 'solution' in resp_data:
                     html = resp_data.get('solution', {}).get('response', '')
+                
+                # Cache the updated cookies and User-Agent
+                cookies_list = resp_data.get('cookies', [])
+                if cookies_list:
+                    cached_cookies = {c['name']: c['value'] for c in cookies_list}
+                    cached_user_agent = resp_data.get('userAgent', '')
+                    log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
+                
                 log(f'[Guardoserie] Trawl success: len={len(html)}')
                 return html
             else:
