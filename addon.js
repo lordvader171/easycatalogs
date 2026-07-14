@@ -261,7 +261,7 @@ async function getCachedGuardoserieCatalog(skip) {
     const cached = await cache.get(cacheKey);
     if (cached && Array.isArray(cached.series)) return cached.series;
 
-    const result = await sendToGuardoserie('catalog', { skip }, 75000);
+    const result = await sendToGuardoserie('catalog', { skip }, 95000);
     const series = result && result.ok && Array.isArray(result.series) ? result.series : [];
     await cache.set(cacheKey, { series }, withTtlJitter(GUARDOSERIE_CACHE_TTL));
     return series;
@@ -344,7 +344,7 @@ async function findGuardoserieSlugForIds(imdbId, tmdbId, item = null) {
     // Fallback: try each slug variant as a direct URL on Guardoserie
     for (const slug of slugVariants) {
         try {
-            const result = await sendToGuardoserie('meta', { slug }, 75000);
+            const result = await sendToGuardoserie('meta', { slug }, 95000);
             if (result && result.ok && Array.isArray(result.seasons)) {
                 if (normalizedImdb) await cache.set(`guardoserie:slug:imdb:${normalizedImdb}`, { slug }, 30 * 86400);
                 if (targetTmdb) await cache.set(`guardoserie:slug:tmdb:${targetTmdb}`, { slug }, 30 * 86400);
@@ -420,7 +420,7 @@ function processGuardoserieQueue() {
     next();
 }
 
-function sendToGuardoserie(action, params = {}, timeoutMs = 75000) {
+function sendToGuardoserie(action, params = {}, timeoutMs = 95000) {
     startGuardoserieScraper();
     return new Promise((resolve, reject) => {
         guardoserieHighQueue.push({ action, params, timeoutMs, resolve, reject });
@@ -428,7 +428,7 @@ function sendToGuardoserie(action, params = {}, timeoutMs = 75000) {
     });
 }
 
-function sendToGuardoserieLowPriority(action, params = {}, timeoutMs = 75000) {
+function sendToGuardoserieLowPriority(action, params = {}, timeoutMs = 95000) {
     startGuardoserieScraper();
     return new Promise((resolve, reject) => {
         guardoserieLowQueue.push({ action, params, timeoutMs, resolve, reject });
@@ -449,7 +449,7 @@ async function getGuardoserieMetaForTurkishSeries(item, primaryMediaId) {
         const cacheKey = `guardoserie:meta:${slug}`;
         let result = await cache.get(cacheKey);
         if (!result) {
-            result = await sendToGuardoserie('meta', { slug }, 75000);
+            result = await sendToGuardoserie('meta', { slug }, 95000);
             if (result && result.ok) {
                 await cache.set(cacheKey, result, withTtlJitter(GUARDOSERIE_META_TTL));
             }
@@ -544,7 +544,7 @@ async function fetchGuardoserieStreams(type, id, config = null) {
     console.log(`[Guardoserie] Stream episode URL: slug=${slug} season=${parsed.season} ep=${parsed.episode} url=${episode ? episode.url : 'null'}`);
     if (!episode || !episode.url) return [];
 
-    const iframe = await sendToGuardoserie('episode', { url: episode.url }, 75000);
+    const iframe = await sendToGuardoserie('episode', { url: episode.url }, 95000);
     console.log(`[Guardoserie] Stream iframe: ok=${iframe && iframe.ok} iframe_url=${iframe ? iframe.iframe_url : 'null'}`);
     if (!iframe || !iframe.ok || !iframe.iframe_url) return [];
 
@@ -586,7 +586,7 @@ async function warmupGuardoserie() {
             const cacheKey = `guardoserie:catalog:${page * GUARDOSERIE_CATALOG_PAGE_SIZE}`;
             let seriesList = await cache.get(cacheKey);
             if (!seriesList || !Array.isArray(seriesList.series)) {
-                const result = await sendToGuardoserieLowPriority('catalog', { skip: page * GUARDOSERIE_CATALOG_PAGE_SIZE }, 75000);
+                const result = await sendToGuardoserieLowPriority('catalog', { skip: page * GUARDOSERIE_CATALOG_PAGE_SIZE }, 95000);
                 seriesList = result && result.ok && Array.isArray(result.series) ? { series: result.series } : { series: [] };
                 if (seriesList.series.length > 0) {
                     await cache.set(cacheKey, seriesList, withTtlJitter(GUARDOSERIE_CACHE_TTL));
@@ -603,7 +603,7 @@ async function warmupGuardoserie() {
                     const metaCacheKey = `guardoserie:meta:${slug}`;
                     if (await cache.get(metaCacheKey)) continue;
                     try {
-                        const result = await sendToGuardoserieLowPriority('meta', { slug }, 75000);
+                        const result = await sendToGuardoserieLowPriority('meta', { slug }, 95000);
                         if (result && result.ok) {
                             await cache.set(metaCacheKey, result, withTtlJitter(GUARDOSERIE_META_TTL));
                             metaCount += 1;

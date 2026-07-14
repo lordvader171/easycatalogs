@@ -50,7 +50,14 @@ def save_cookie_cache():
         log(f'[Guardoserie] Failed to save cookie cache file: {e}')
 
 def is_cloudflare_challenge(html):
-    return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
+    if not html:
+        return True
+    html_lower = html.lower()
+    return ('just a moment' in html_lower or 
+            'cf-challenge' in html_lower or 
+            'challenge-platform' in html_lower or
+            '<title>loading' in html_lower or
+            '__cf_chl_tk' in html)
 
 def fetch_page(url):
     global cached_cookies, cached_user_agent
@@ -59,76 +66,88 @@ def fetch_page(url):
     if not cached_cookies:
         load_cookie_cache()
 
-    # 1. Try direct fetch via curl_cffi with cached cookies
-    if cached_cookies and cached_user_agent:
-        try:
-            log(f'[Guardoserie] Fetching directly via curl_cffi: {url}')
-            headers = {"User-Agent": cached_user_agent}
-            response = requests.get(
-                url,
-                headers=headers,
-                cookies=cached_cookies,
-                impersonate="firefox",
-                timeout=30
-            )
-            html = response.text
-            status = response.status_code
-            if (200 <= status < 400) and not is_cloudflare_challenge(html):
-                log(f'[Guardoserie] Direct fetch success: status={status} len={len(html)}')
-                return html
-            else:
-                log(f'[Guardoserie] Direct fetch failed/got challenge: status={status} len={len(html) if html else 0}')
-        except Exception as e:
-            log(f'[Guardoserie] Direct fetch exception: {e}')
-
-    # 2. Fallback: Fetch via Trawl to solve challenge and get new cookies
-    log(f'[Guardoserie] Fetch via Trawl: {url}')
-    try:
-        req_url = f"{TRAWL_URL.rstrip('/')}/scrape"
-        data = {
-            "url": url,
-            "maxTimeout": 60000
-        }
-        req = urllib.request.Request(
-            req_url,
-            data=json.dumps(data).encode('utf-8'),
-            headers={'Content-Type': 'application/json'},
-            method='POST'
-        )
-        with urllib.request.urlopen(req, timeout=65) as response:
-            resp_data = json.loads(response.read().decode('utf-8'))
-            status_code = resp_data.get('statusCode')
-            html = resp_data.get('html', '')
-            
+    for attempt in range(1, 4):
+        log(f'[Guardoserie] Fetch attempt {attempt} for: {url}')
+        
+        # 1. Try direct fetch via curl_cffi with cached cookies
+        if cached_cookies and cached_user_agent:
             try:
-                status_int = int(status_code)
-            except (TypeError, ValueError):
-                status_int = status_code
+                log(f'[Guardoserie] Fetching directly via curl_cffi: {url}')
+                headers = {"User-Agent": cached_user_agent}
+                response = requests.get(
+                    url,
+                    headers=headers,
+                    cookies=cached_cookies,
+                    impersonate="firefox",
+                    timeout=10
+                )
+                html = response.text
+                status = response.status_code
+                if (200 <= status < 400) and not is_cloudflare_challenge(html):
+                    log(f'[Guardoserie] Direct fetch success on attempt {attempt}: status={status} len={len(html)}')
+                    return html
+                else:
+                    log(f'[Guardoserie] Direct fetch on attempt {attempt} failed or got challenge: status={status} len={len(html) if html else 0}')
+            except Exception as e:
+                log(f'[Guardoserie] Direct fetch attempt {attempt} exception: {e}')
 
-            is_success = False
-            if isinstance(status_int, int):
-                is_success = 200 <= status_int < 400
-            else:
-                is_success = resp_data.get('status') == 'ok'
+        # 2. Fallback: Fetch via Trawl to solve challenge and get new cookies
+        log(f'[Guardoserie] Fetch via Trawl: {url}')
+        try:
+            req_url = f"{TRAWL_URL.rstrip('/')}/scrape"
+            data = {
+                "url": url,
+                "maxTimeout": 80000
+            }
+            req = urllib.request.Request(
+                req_url,
+                data=json.dumps(data).encode('utf-8'),
+                headers={'Content-Type': 'application/json'},
+                method='POST'
+            )
+            with urllib.request.urlopen(req, timeout=85) as response:
+                resp_data = json.loads(response.read().decode('utf-8'))
+                status_code = resp_data.get('statusCode')
+                html = resp_data.get('html', '')
+                
+                try:
+                    status_int = int(status_code)
+                except (TypeError, ValueError):
+                    status_int = status_code
 
-            if is_success:
-                if not html and 'solution' in resp_data:
-                    html = resp_data.get('solution', {}).get('response', '')
-                
-                # Cache the updated cookies and User-Agent
-                cookies_list = resp_data.get('cookies', [])
-                if cookies_list:
-                    cached_cookies = {c['name']: c['value'] for c in cookies_list}
-                    cached_user_agent = resp_data.get('userAgent', '')
-                    log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
-                    save_cookie_cache()
-                
-                log(f'[Guardoserie] Trawl success: len={len(html)}')
-                return html
-            else:
-                log(f"[Guardoserie] Trawl error response: status={status_code} data={resp_data}")
-    except Exception as e:
-        log(f"[Guardoserie] Trawl request failed to {url}: {e}")
+                is_success = False
+                if isinstance(status_int, int):
+                    is_success = 200 <= status_int < 400
+                else:
+                    is_success = resp_data.get('status') == 'ok'
+
+                if is_success:
+                    if not html and 'solution' in resp_data:
+                        html = resp_data.get('solution', {}).get('response', '')
+                    
+                    # Cache the updated cookies and User-Agent
+                    cookies_list = resp_data.get('cookies', [])
+                    if cookies_list:
+                        cached_cookies = {c['name']: c['value'] for c in cookies_list}
+                        cached_user_agent = resp_data.get('userAgent', '')
+                        log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
+                        save_cookie_cache()
+                    
+                    if not is_cloudflare_challenge(html):
+                        log(f'[Guardoserie] Trawl success on attempt {attempt}: len={len(html)}')
+                        return html
+                    else:
+                        log(f'[Guardoserie] Trawl on attempt {attempt} returned challenge page: len={len(html)}')
+                else:
+                    log(f"[Guardoserie] Trawl error response: status={status_code} data={resp_data}")
+        except Exception as e:
+            log(f"[Guardoserie] Trawl request failed on attempt {attempt}: {e}")
+        
+        # If we got a challenge or failed, wait 2.5 seconds before retrying
+        if attempt < 3:
+            log('[Guardoserie] Waiting 2.5 seconds before retry...')
+            time.sleep(2.5)
+
     return ""
 
 def parse_catalog(html):
