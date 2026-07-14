@@ -208,7 +208,14 @@ def parse_episode(html):
     doc = BeautifulSoup(html, 'html.parser')
     for iframe in doc.select('iframe'):
         src = iframe.get('src', '')
-        if src and src != 'javascript:false':
+        if not src:
+            continue
+        src_lower = src.lower().strip()
+        if src_lower in ('about:blank', 'javascript:false', 'javascript:;'):
+            continue
+        if src_lower.startswith('javascript:'):
+            continue
+        if src.startswith('http://') or src.startswith('https://') or src.startswith('//'):
             return {'ok': True, 'iframe_url': src}
     return {'ok': False, 'iframe_url': None}
 
