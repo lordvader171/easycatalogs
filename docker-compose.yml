@@ -17,6 +17,10 @@ services:
     container_name: easy-catalogs-trawl
     restart: unless-stopped
     shm_size: 1gb
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
     environment:
       - REDIS_URL=redis://redis:6379
       - BROWSER_POOL_SIZE=2
