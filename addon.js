@@ -438,7 +438,6 @@ function sendToGuardoserieLowPriority(action, params = {}, timeoutMs = 60000) {
 
 async function getGuardoserieMetaForTurkishSeries(item, primaryMediaId) {
     if (!isTurkishTmdbSeries(item)) {
-        console.log(`[Guardoserie] Skipped: not Turkish lang=${item.original_language} country=${JSON.stringify(item.origin_country)}`);
         return null;
     }
     const imdbId = normalizeImdbId(item.imdb_id || (item.external_ids && item.external_ids.imdb_id));
