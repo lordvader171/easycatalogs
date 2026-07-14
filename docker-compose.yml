@@ -1,37 +1,4 @@
 services:
-  easy-catalogs:
-    build: .
-    container_name: easy-catalogs
-    ports:
-      - "7171:7171"
-    environment:
-      - PORT=7171
-      - ADDON_URL=http://localhost:7171
-      - NODE_ENV=production
-      - REDIS_URL=redis://redis:6379
-      - TRAWL_URL=http://trawl:8191
-      - CACHE_TYPE=hybrid # Options: 'hybrid' (attempts Redis connection for fast cache + SQLite for long-term mappings) or 'sqlite' (forces SQLite only)
-    restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
-      trawl:
-        condition: service_started
-    volumes:
-      - ./data:/app/data
-
-  trawl:
-    image: ghcr.io/germondai/trawl:latest
-    container_name: easy-catalogs-trawl
-    restart: unless-stopped
-    shm_size: 1gb
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - BROWSER_POOL_SIZE=2
-    depends_on:
-      redis:
-        condition: service_healthy
-
   redis:
     image: redis:alpine
     container_name: easy-catalogs-redis
@@ -44,6 +11,35 @@ services:
       retries: 10
     volumes:
       - redis-data:/data
+
+  trawl:
+    image: ghcr.io/germondai/trawl:latest
+    container_name: easy-catalogs-trawl
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      - BROWSER_POOL_SIZE=2
+
+  easy-catalogs:
+    build: .
+    container_name: easy-catalogs
+    ports:
+      - "7171:7171"
+    environment:
+      - PORT=7171
+      - ADDON_URL=http://localhost:7171
+      - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
+      - TRAWL_URL=http://trawl:8191
+      - CACHE_TYPE=hybrid
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+      trawl:
+        condition: service_started
+    volumes:
+      - ./data:/app/data
 
 volumes:
   redis-data:
