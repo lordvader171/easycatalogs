@@ -206,8 +206,17 @@ def cmd_meta(slug):
 
 def parse_episode(html):
     doc = BeautifulSoup(html, 'html.parser')
-    for iframe in doc.select('iframe'):
+    iframes = doc.select('iframe')
+    log(f"[Guardoserie] parse_episode found {len(iframes)} iframes")
+    for iframe in iframes:
         src = iframe.get('src', '')
+        data_src = iframe.get('data-src', '') or iframe.get('data-lazy-src', '')
+        if data_src:
+            src = data_src
+            log(f"[Guardoserie] Found lazy-loaded data-src: '{src}'")
+        else:
+            log(f"[Guardoserie] Found standard src: '{src}'")
+
         if not src:
             continue
         src_lower = src.lower().strip()
