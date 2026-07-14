@@ -12,15 +12,52 @@ SITE_CATALOG_PAGE_SIZE = 40
 cached_cookies = {}
 cached_user_agent = ""
 
+# Resolve persistent cache file path in data volume
+if os.path.exists("/app/data"):
+    COOKIE_CACHE_FILE = "/app/data/guardoserie_cookies.json"
+else:
+    COOKIE_CACHE_FILE = os.path.join(os.path.dirname(__file__), "data", "guardoserie_cookies.json")
+
 def log(message):
     sys.stderr.write(message + '\n')
     sys.stderr.flush()
+
+def load_cookie_cache():
+    global cached_cookies, cached_user_agent
+    try:
+        if os.path.exists(COOKIE_CACHE_FILE):
+            with open(COOKIE_CACHE_FILE, 'r') as f:
+                cache_data = json.load(f)
+                cached_cookies = cache_data.get('cookies', {})
+                cached_user_agent = cache_data.get('userAgent', '')
+                if cached_cookies:
+                    log(f'[Guardoserie] Loaded {len(cached_cookies)} cookies from cache file')
+    except Exception as e:
+        log(f'[Guardoserie] Failed to load cookie cache file: {e}')
+
+def save_cookie_cache():
+    try:
+        dir_name = os.path.dirname(COOKIE_CACHE_FILE)
+        if dir_name and not os.path.exists(dir_name):
+            os.makedirs(dir_name, exist_ok=True)
+        with open(COOKIE_CACHE_FILE, 'w') as f:
+            json.dump({
+                'cookies': cached_cookies,
+                'userAgent': cached_user_agent
+            }, f)
+        log('[Guardoserie] Saved cookies to cache file')
+    except Exception as e:
+        log(f'[Guardoserie] Failed to save cookie cache file: {e}')
 
 def is_cloudflare_challenge(html):
     return not html or 'Just a moment' in html or 'cf-challenge' in html or 'challenge-platform' in html
 
 def fetch_page(url):
     global cached_cookies, cached_user_agent
+
+    # Load cache lazily from disk if empty
+    if not cached_cookies:
+        load_cookie_cache()
 
     # 1. Try direct fetch via curl_cffi with cached cookies
     if cached_cookies and cached_user_agent:
@@ -84,6 +121,7 @@ def fetch_page(url):
                     cached_cookies = {c['name']: c['value'] for c in cookies_list}
                     cached_user_agent = resp_data.get('userAgent', '')
                     log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
+                    save_cookie_cache()
                 
                 log(f'[Guardoserie] Trawl success: len={len(html)}')
                 return html
