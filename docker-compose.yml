@@ -12,21 +12,13 @@ services:
     volumes:
       - redis-data:/data
 
-  trawl:
-    image: ghcr.io/germondai/trawl:latest
-    container_name: easy-catalogs-trawl
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: easy-catalogs-flaresolverr
     restart: unless-stopped
-    shm_size: 1gb
-    cap_add:
-      - SYS_ADMIN
-    security_opt:
-      - seccomp:unconfined
     environment:
-      - REDIS_URL=redis://redis:6379
-      - BROWSER_POOL_SIZE=2
-    depends_on:
-      redis:
-        condition: service_healthy
+      - LOG_LEVEL=info
+      - TZ=Europe/Rome
 
   easy-catalogs:
     build: .
@@ -38,13 +30,13 @@ services:
       - ADDON_URL=http://localhost:7171
       - NODE_ENV=production
       - REDIS_URL=redis://redis:6379
-      - TRAWL_URL=http://trawl:8191
+      - FLARESOLVERR_URL=http://flaresolverr:8191
       - CACHE_TYPE=hybrid
     restart: unless-stopped
     depends_on:
       redis:
         condition: service_healthy
-      trawl:
+      flaresolverr:
         condition: service_started
     volumes:
       - ./data:/app/data
