@@ -151,7 +151,7 @@ const GUARDOSERIE_WARMUP_ON_START = process.env.GUARDOSERIE_WARMUP_ON_START !== 
 const GUARDOSERIE_WARMUP_META = process.env.GUARDOSERIE_WARMUP_META !== '0';
 const GUARDOSERIE_WARMUP_INTERVAL_MS = Number.parseInt(process.env.GUARDOSERIE_WARMUP_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
 let guardoserieWarmupRunning = false;
-let metaCacheVersion = 27;
+let metaCacheVersion = 28;
 let turkishMetaCacheVersion = 0;
 let kitsuCacheVersion = 23;
 
@@ -6662,39 +6662,50 @@ function getTurkishMetaCacheKey(type, id, config = null) {
 }
 
 async function buildMetaForId(type, id, config = null) {
+    let meta = null;
     if (id.startsWith("kitsu:")) {
-        return buildMetaForKitsuId(type, id, config);
-    }
-
-    let tmdbId = id;
-    let url = "";
-
-    if (id.startsWith("tt")) {
-        url = `${BASE_URL}/find/${id}?api_key=${getTmdbApiKey(config)}&external_source=imdb_id`;
-    } else if (id.startsWith("tmdb:")) {
-        tmdbId = id.split(":")[1];
-        url = `${BASE_URL}/${type === "series" ? "tv" : "movie"}/${tmdbId}?api_key=${getTmdbApiKey(config)}&language=it-IT&append_to_response=credits,similar,videos,images,external_ids,release_dates&include_image_language=it,en,null&include_video_language=it,en,null`;
+        meta = await buildMetaForKitsuId(type, id, config);
     } else {
-        url = `${BASE_URL}/${type === "series" ? "tv" : "movie"}/${id}?api_key=${getTmdbApiKey(config)}&language=it-IT&append_to_response=credits,similar,videos,images,external_ids,release_dates&include_image_language=it,en,null&include_video_language=it,en,null`;
-    }
+        let tmdbId = id;
+        let url = "";
 
-    const response = await fetch(url);
-    const data = await response.json();
-
-    if (id.startsWith("tt")) {
-        const results = type === "series" ? data.tv_results : data.movie_results;
-        if (results && results.length > 0) {
-            const item = results[0];
-            const details = await fetchTmdbDetails(type === "series" ? "tv" : "movie", item.id, config);
-            if (details) {
-                return transformToMeta(details, type, config);
-            }
+        if (id.startsWith("tt")) {
+            url = `${BASE_URL}/find/${id}?api_key=${getTmdbApiKey(config)}&external_source=imdb_id`;
+        } else if (id.startsWith("tmdb:")) {
+            tmdbId = id.split(":")[1];
+            url = `${BASE_URL}/${type === "series" ? "tv" : "movie"}/${tmdbId}?api_key=${getTmdbApiKey(config)}&language=it-IT&append_to_response=credits,similar,videos,images,external_ids,release_dates&include_image_language=it,en,null&include_video_language=it,en,null`;
+        } else {
+            url = `${BASE_URL}/${type === "series" ? "tv" : "movie"}/${id}?api_key=${getTmdbApiKey(config)}&language=it-IT&append_to_response=credits,similar,videos,images,external_ids,release_dates&include_image_language=it,en,null&include_video_language=it,en,null`;
         }
 
-        return null;
+        const response = await fetch(url);
+        const data = await response.json();
+
+        if (id.startsWith("tt")) {
+            const results = type === "series" ? data.tv_results : data.movie_results;
+            if (results && results.length > 0) {
+                const item = results[0];
+                const details = await fetchTmdbDetails(type === "series" ? "tv" : "movie", item.id, config);
+                if (details) {
+                    meta = await transformToMeta(details, type, config);
+                    if (meta && type === "series" && isTmdbAnimeDetails(details)) {
+                        await enrichMetaWithAnimeFillerTags(meta, config);
+                    }
+                }
+            }
+        } else {
+            meta = await transformToMeta(data, type, config);
+            if (meta && type === "series" && isTmdbAnimeDetails(data)) {
+                await enrichMetaWithAnimeFillerTags(meta, config);
+            }
+        }
     }
 
-    return transformToMeta(data, type, config);
+    if (meta && type === "series" && id.startsWith("kitsu:")) {
+        await enrichMetaWithAnimeFillerTags(meta, config);
+    }
+
+    return meta;
 }
 
 async function getCachedMetaForId(type, id, config = null) {
@@ -7822,6 +7833,196 @@ app.get('/manifest.json', async (req, res) => {
     manifest.resources = addonInterface.manifest.resources;
     res.json(manifest);
 });
+
+// AnimeFillerList Integration
+function normalizeTitleForMapping(title) {
+    return String(title || "").toLowerCase()
+        .replace(/[^a-z0-9]/g, '')
+        .trim();
+}
+
+function cleanTitleForMapping(title) {
+    return String(title || "")
+        .replace(/\s+season\s+\d+/gi, '')
+        .replace(/\s+part\s+\d+/gi, '')
+        .replace(/\s+cour\s+\d+/gi, '')
+        .replace(/\s+\d+(st|nd|rd|th)?\s+season/gi, '')
+        .replace(/\s+\d+$/g, '')
+        .trim();
+}
+
+let showsCache = null;
+async function getAnimeFillerShowsMap() {
+    if (showsCache) return showsCache;
+    const cacheKey = "animefillerlist:shows_map";
+    try {
+        const cached = await cache.get(cacheKey);
+        if (cached) {
+            showsCache = cached;
+            return showsCache;
+        }
+    } catch (e) {}
+
+    try {
+        const res = await fetch("https://www.animefillerlist.com/shows");
+        const html = await res.text();
+        const map = {};
+        
+        const linkRegex = /<a href="\/shows\/([^"]+)">([^<]+)<\/a>/gi;
+        let match;
+        while ((match = linkRegex.exec(html)) !== null) {
+            const slug = match[1];
+            const fullName = match[2];
+            
+            map[normalizeTitleForMapping(fullName)] = slug;
+            
+            const parenMatch = fullName.match(/\(([^)]+)\)/);
+            if (parenMatch) {
+                map[normalizeTitleForMapping(parenMatch[1])] = slug;
+                const outsideParen = fullName.replace(/\([^)]+\)/g, '').trim();
+                map[normalizeTitleForMapping(outsideParen)] = slug;
+            }
+            map[slug.replace(/-/g, '')] = slug;
+        }
+
+        showsCache = map;
+        try {
+            await cache.set(cacheKey, map, 7 * 86400); // 7 days cache
+        } catch (e) {}
+        return showsCache;
+    } catch (error) {
+        console.error("[Easy Catalogs] Error fetching AnimeFillerList shows:", error);
+        return {};
+    }
+}
+
+async function getAnimeFillerEpisodes(slug) {
+    const cacheKey = `animefillerlist:episodes:${slug}`;
+    try {
+        const cached = await cache.get(cacheKey);
+        if (cached) return cached;
+    } catch (e) {}
+
+    try {
+        const showRes = await fetch(`https://www.animefillerlist.com/shows/${slug}`);
+        if (!showRes.ok) return null;
+        const showHtml = await showRes.text();
+
+        const rows = showHtml.split(/<tr/i).slice(1);
+        const episodes = [];
+        for (const row of rows) {
+            const numMatch = row.match(/class="Number">(\d+)<\/td>/i);
+            const typeMatch = row.match(/class="Type"><span>([^<]+)<\/span>/i);
+            const dateMatch = row.match(/class="Date">([^<]*)<\/td>/i);
+            if (numMatch && typeMatch) {
+                episodes.push({
+                    number: parseInt(numMatch[1], 10),
+                    type: typeMatch[1].trim(),
+                    date: dateMatch ? dateMatch[1].trim() : ""
+                });
+            }
+        }
+
+        if (episodes.length > 0) {
+            try {
+                await cache.set(cacheKey, episodes, 24 * 3600); // 24 hours cache
+            } catch (e) {}
+        }
+        return episodes;
+    } catch (error) {
+        console.error(`[Easy Catalogs] Error fetching episodes for ${slug}:`, error);
+        return null;
+    }
+}
+
+function cleanDateString(dateStr) {
+    if (!dateStr) return null;
+    const match = dateStr.match(/^(\d{4}-\d{2}-\d{2})/);
+    return match ? match[1] : null;
+}
+
+function getDaysDifference(d1, d2) {
+    try {
+        const timeDiff = Math.abs(new Date(d1).getTime() - new Date(d2).getTime());
+        return Math.ceil(timeDiff / (1000 * 3600 * 24));
+    } catch (e) {
+        return 999;
+    }
+}
+
+async function enrichMetaWithAnimeFillerTags(meta, config) {
+    if (!meta || !Array.isArray(meta.videos) || meta.videos.length === 0) return;
+
+    const showsMap = await getAnimeFillerShowsMap();
+    const title = meta.name || "";
+    
+    const searchKeys = [
+        normalizeTitleForMapping(title),
+        normalizeTitleForMapping(cleanTitleForMapping(title))
+    ];
+
+    let foundSlug = null;
+    for (const key of searchKeys) {
+        if (showsMap[key]) {
+            foundSlug = showsMap[key];
+            break;
+        }
+    }
+
+    if (!foundSlug) {
+        // Direct format fallback
+        foundSlug = title.toLowerCase()
+            .replace(/[^a-z0-9\s-]/g, '')
+            .trim()
+            .replace(/\s+/g, '-');
+    }
+
+    const episodes = await getAnimeFillerEpisodes(foundSlug);
+    if (!episodes || episodes.length === 0) return;
+
+    // Sequential absolute number counter for TMDB
+    let absoluteNumber = 0;
+    for (const video of meta.videos) {
+        if (video.season !== 0) {
+            absoluteNumber++;
+        }
+        
+        let match = null;
+
+        // Try date matching first
+        const videoDate = cleanDateString(video.released);
+        if (videoDate) {
+            // 1. Exact date match
+            match = episodes.find(ep => cleanDateString(ep.date) === videoDate);
+            // 2. Tolerant date match (+/- 1 day)
+            if (!match) {
+                match = episodes.find(ep => ep.date && getDaysDifference(ep.date, videoDate) <= 1);
+            }
+        }
+
+        // Fallback to episode number
+        if (!match) {
+            const targetNum = meta.id.startsWith("kitsu:") ? video.episode : absoluteNumber;
+            match = episodes.find(ep => ep.number === targetNum);
+        }
+
+        if (match) {
+            let tag = "";
+            const lowerType = match.type.toLowerCase();
+            if (lowerType.includes("mixed")) {
+                tag = "[MIXED]";
+            } else if (lowerType.includes("filler")) {
+                tag = "[FILLER]";
+            } else if (lowerType.includes("canon")) {
+                tag = "[CANON]";
+            }
+
+            if (tag && !video.title.startsWith("[")) {
+                video.title = `${tag} ${video.title}`;
+            }
+        }
+    }
+}
 
 app.use(addonRouter);
 
