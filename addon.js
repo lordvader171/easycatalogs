@@ -151,7 +151,7 @@ const GUARDOSERIE_WARMUP_ON_START = process.env.GUARDOSERIE_WARMUP_ON_START !== 
 const GUARDOSERIE_WARMUP_META = process.env.GUARDOSERIE_WARMUP_META !== '0';
 const GUARDOSERIE_WARMUP_INTERVAL_MS = Number.parseInt(process.env.GUARDOSERIE_WARMUP_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
 let guardoserieWarmupRunning = false;
-let metaCacheVersion = 31;
+let metaCacheVersion = 33;
 let turkishMetaCacheVersion = 0;
 let kitsuCacheVersion = 23;
 
@@ -8010,7 +8010,7 @@ async function enrichMetaWithAnimeFillerTags(meta, config) {
             let tag = "";
             const lowerType = match.type.toLowerCase();
             if (lowerType.includes("mixed")) {
-                tag = "[⚠️ MIXED]";
+                tag = "[⚠️ MIXED CANON]";
             } else if (lowerType.includes("filler")) {
                 tag = "[⛔ FILLER]";
             } else if (lowerType === "anime canon") {
@@ -8019,8 +8019,8 @@ async function enrichMetaWithAnimeFillerTags(meta, config) {
                 tag = "[✅ MANGA CANON]";
             }
 
-            if (tag && !video.title.startsWith("[")) {
-                video.title = `${tag} ${video.title}`;
+            if (tag && !video.title.includes(tag)) {
+                video.title = `${video.title} ${tag}`;
             }
         }
     }
