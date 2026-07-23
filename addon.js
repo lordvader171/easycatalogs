@@ -6234,7 +6234,9 @@ const SIMKL_TYPES = [
     "Simkl PTW Series", "Simkl PTW Movie",
     "Simkl Completed Series",
     "Simkl Dropped Series", "Simkl Dropped Movie",
-    "Simkl Hold Series"
+    "Simkl Completed Movie",
+    "Simkl Hold Series",
+    "Simkl Watching Series", "Simkl Watching Movie"
 ];
 
 const STREMIO_TYPES = ["movie", "series"];
@@ -6630,8 +6632,8 @@ const builder = new addonBuilder(manifest);
 
 function normalizeStremioType(type) {
     const t = String(type || "").trim();
-    if (/^Simkl\s+(PTW|Completed|Dropped|Hold)\s+Series$/i.test(t)) return "series";
-    if (/^Simkl\s+(PTW|Dropped)\s+Movie$/i.test(t)) return "movie";
+    if (/^Simkl\s+(PTW|Completed|Dropped|Hold|Watching)\s+Series$/i.test(t)) return "series";
+    if (/^Simkl\s+(PTW|Dropped|Watching|Completed)\s+Movie$/i.test(t)) return "movie";
     return t;
 }
 
