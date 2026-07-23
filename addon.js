@@ -6619,7 +6619,15 @@ manifest.catalogs = [fullCatalogs[0]];
 
 const builder = new addonBuilder(manifest);
 
+function normalizeStremioType(type) {
+    const t = String(type || "").trim();
+    if (/^Simkl\s+(PTW|Completed|Dropped|Hold)\s+Series$/i.test(t)) return "series";
+    if (/^Simkl\s+(PTW|Dropped)\s+Movie$/i.test(t)) return "movie";
+    return t;
+}
+
 builder.defineStreamHandler(async ({ type, id }) => {
+    type = normalizeStremioType(type);
     const config = getRequestConfig();
 
     const normalizedId = String(id || "").trim();
@@ -6785,6 +6793,7 @@ async function fetchSpecialSeriesCatalogMetas(catalogId, extra = {}, config = nu
 
 // Metadata Handler
 builder.defineMetaHandler(async ({ type, id }) => {
+    type = normalizeStremioType(type);
     const config = getRequestConfig();
     const meta = await getCachedMetaForId(type, id, config);
     return meta ? { meta } : { meta: {} };
@@ -7009,6 +7018,7 @@ async function transformToMeta(item, type, config = null, options = {}) {
 // The builder freezes the manifest, but let's check if we can modify the array content later via interface
 
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
+    type = normalizeStremioType(type);
     const sourceCatalogId = String(id || "").trim();
 
     // Convert Stremio type to TMDB type
