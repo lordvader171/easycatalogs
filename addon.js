@@ -151,7 +151,7 @@ const GUARDOSERIE_WARMUP_ON_START = process.env.GUARDOSERIE_WARMUP_ON_START !== 
 const GUARDOSERIE_WARMUP_META = process.env.GUARDOSERIE_WARMUP_META !== '0';
 const GUARDOSERIE_WARMUP_INTERVAL_MS = Number.parseInt(process.env.GUARDOSERIE_WARMUP_INTERVAL_MS || String(6 * 60 * 60 * 1000), 10);
 let guardoserieWarmupRunning = false;
-let metaCacheVersion = 33;
+let metaCacheVersion = 35;
 let turkishMetaCacheVersion = 0;
 let kitsuCacheVersion = 23;
 
@@ -7960,6 +7960,14 @@ async function enrichMetaWithAnimeFillerTags(meta, config) {
         normalizeTitleForMapping(title),
         normalizeTitleForMapping(cleanTitleForMapping(title))
     ];
+    const splitParts = title.split(/[:\-(]/);
+    if (splitParts.length > 1) {
+        const prefix = splitParts[0].trim();
+        if (prefix) {
+            searchKeys.push(normalizeTitleForMapping(prefix));
+            searchKeys.push(normalizeTitleForMapping(cleanTitleForMapping(prefix)));
+        }
+    }
 
     let foundSlug = null;
     for (const key of searchKeys) {
@@ -8010,13 +8018,13 @@ async function enrichMetaWithAnimeFillerTags(meta, config) {
             let tag = "";
             const lowerType = match.type.toLowerCase();
             if (lowerType.includes("mixed")) {
-                tag = "[⚠️ MIXED CANON]";
+                tag = "⚠️ MIXED CANON";
             } else if (lowerType.includes("filler")) {
-                tag = "[⛔ FILLER]";
+                tag = "⛔ FILLER";
             } else if (lowerType === "anime canon") {
-                tag = "[🔵 ANIME CANON]";
+                tag = "🔵 ANIME CANON";
             } else if (lowerType === "manga canon" || lowerType.includes("canon")) {
-                tag = "[✅ MANGA CANON]";
+                tag = "✅ MANGA CANON";
             }
 
             if (tag && !video.title.includes(tag)) {
