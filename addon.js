@@ -6230,17 +6230,6 @@ Object.entries(SLUG_TO_PROVIDER).forEach(([slug, name]) => {
 const PROVIDERS_WITHOUT_ORIGINALS = new Set(["Crunchyroll"]);
 const PROVIDERS_SERIES_ONLY = new Set(["Discovery+"]);
 
-const SIMKL_TYPES = [
-    "Simkl PTW Series", "Simkl PTW Movie",
-    "Simkl Completed Series",
-    "Simkl Dropped Series", "Simkl Dropped Movie",
-    "Simkl Completed Movie",
-    "Simkl Hold Series",
-    "Simkl Watching Series", "Simkl Watching Movie"
-];
-
-const STREMIO_TYPES = ["movie", "series"];
-
 const manifest = {
     id: "org.bestia.easycatalogs",
     version: "1.1.3",
@@ -6252,10 +6241,10 @@ const manifest = {
     },
     resources: [
         "catalog",
-        { name: "meta", types: [...STREMIO_TYPES, ...SIMKL_TYPES], idPrefixes: ["tmdb", "tt", "kitsu"] },
-        { name: "stream", types: [...STREMIO_TYPES, ...SIMKL_TYPES], idPrefixes: ["tmdb", "tt", "kitsu"] }
+        { name: "meta", types: ["movie", "series"], idPrefixes: ["tmdb", "tt", "kitsu"] },
+        { name: "stream", types: ["movie", "series"], idPrefixes: ["tmdb", "tt", "kitsu"] }
     ],
-    types: [...STREMIO_TYPES, ...SIMKL_TYPES],
+    types: ["movie", "series"],
     catalogs: [], // Start empty, populate later to bypass 8KB limit check
     idPrefixes: ["tmdb", "tt", "kitsu"]
 };
