@@ -28,6 +28,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     libfontconfig1 \
     libfreetype6 \
+    libgtk-3-0 \
+    libdbus-glib-1-2 \
+    libxt6 \
     xdotool \
     fluxbox \
     && rm -rf /var/lib/apt/lists/*

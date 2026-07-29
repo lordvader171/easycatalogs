@@ -66,24 +66,7 @@ _browser_context = None
 _playwright_instance = None
 
 def get_browser_context():
-    global _browser_context, _playwright_instance
-    if _browser_context is None:
-        try:
-            from playwright.sync_api import sync_playwright
-            from camoufox.utils import launch_options as _cf_lo
-            import tempfile
-            log('[Guardoserie] Inizializzazione istanza in-memory Camoufox...')
-            _playwright_instance = sync_playwright().start()
-            td = os.path.join(tempfile.gettempdir(), "camoufox_ctx_guardoserie")
-            os.makedirs(td, exist_ok=True)
-            _browser_context = _playwright_instance.firefox.launch_persistent_context(
-                td, no_viewport=True, **_cf_lo(headless=True, locale="it-IT", geoip=True)
-            )
-            log('[Guardoserie] Istanza Camoufox in-memory pronta.')
-        except Exception as e:
-            log(f'[Guardoserie] Errore inizializzazione Camoufox in-memory: {e}')
-            _browser_context = None
-    return _browser_context
+    return None
 
 CF_BYPASS_SCRIPT = os.environ.get(
     'CF_BYPASS_SCRIPT',
