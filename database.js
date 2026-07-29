@@ -6,7 +6,7 @@ const redisUrl = typeof process.env.REDIS_URL === "string"
     ? process.env.REDIS_URL.trim()
     : "";
 
-const cacheType = (process.env.CACHE_TYPE || "hybrid").toLowerCase().trim();
+const cacheType = (process.env.CACHE_TYPE || "sqlite").toLowerCase().trim();
 
 let client = null;
 let cacheEnabled = false;

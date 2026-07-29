@@ -1,17 +1,4 @@
 services:
-  redis:
-    image: redis:alpine
-    container_name: easy-catalogs-redis
-    command: ["redis-server", "--save", "60", "1"]
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-    volumes:
-      - redis-data:/data
-
   easy-catalogs:
     build: .
     container_name: easy-catalogs
@@ -21,8 +8,6 @@ services:
       - PORT=7171
       - ADDON_URL=http://localhost:7171
       - NODE_ENV=production
-      - REDIS_URL=redis://redis:6379
-      - CACHE_TYPE=hybrid
       - NODE_OPTIONS=--dns-result-order=ipv4first
     cap_add:
       - NET_ADMIN
@@ -32,11 +17,5 @@ services:
     devices:
       - /dev/net/tun
     restart: unless-stopped
-    depends_on:
-      redis:
-        condition: service_healthy
     volumes:
       - ./data:/app/data
-
-volumes:
-  redis-data:
