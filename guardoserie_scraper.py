@@ -3,8 +3,6 @@ import urllib.request
 from bs4 import BeautifulSoup
 from curl_cffi import requests
 
-FLARESOLVERR_URL = os.environ.get('FLARESOLVERR_URL', 'http://localhost:8191')
-
 STREMIO_CATALOG_PAGE_SIZE = 20
 SITE_CATALOG_PAGE_SIZE = 40
 
@@ -53,90 +51,69 @@ def is_cloudflare_challenge(html):
     if not html:
         return True
     html_lower = html.lower()
-    return ('just a moment' in html_lower or 
-            'cf-challenge' in html_lower or 
-            'challenge-platform' in html_lower or
-            '<title>loading' in html_lower or
-            '__cf_chl_tk' in html)
+    return ('<title>just a moment' in html_lower or 
+            '<title>ci siamo quasi' in html_lower or
+            '<title>attention required!' in html_lower or
+            'id="challenge-running"' in html_lower or
+            'id="challenge-stage"' in html_lower or
+            'id="challenge-form"' in html_lower or
+            'cf-browser-verification' in html_lower or
+            'verify you are human' in html_lower or
+            'in attesa della risposta' in html_lower or
+            'enable javascript and cookies to continue' in html_lower)
 
-def fetch_page(url):
+CF_BYPASS_SCRIPT = os.environ.get(
+    'CF_BYPASS_SCRIPT',
+    os.path.join(os.path.dirname(__file__), "cf_bypass.py")
+)
+
+def fetch_via_cf_bypass(url):
     global cached_cookies, cached_user_agent
+    script_path = CF_BYPASS_SCRIPT
+    if not os.path.exists(script_path):
+        script_path = os.path.join(os.path.dirname(__file__), "cf_bypass.py")
+    if not os.path.exists(script_path):
+        log(f'[Guardoserie] cf_bypass script not found at {script_path}')
+        return ""
 
-    # Load cache lazily from disk if empty
-    if not cached_cookies:
-        load_cookie_cache()
-
-    for attempt in range(1, 4):
-        log(f'[Guardoserie] Fetch attempt {attempt} for: {url}')
-        
-        # 1. Try direct fetch via curl_cffi with cached cookies
-        if cached_cookies and cached_user_agent:
-            try:
-                log(f'[Guardoserie] Fetching directly via curl_cffi: {url}')
-                headers = {"User-Agent": cached_user_agent}
-                response = requests.get(
-                    url,
-                    headers=headers,
-                    cookies=cached_cookies,
-                    impersonate="firefox",
-                    timeout=15
-                )
-                html = response.text
-                status = response.status_code
-                if (200 <= status < 400) and not is_cloudflare_challenge(html):
-                    log(f'[Guardoserie] Direct fetch success on attempt {attempt}: status={status} len={len(html)}')
+    log(f'[Guardoserie] Fetching via cf_bypass (Camoufox): {url}')
+    try:
+        import subprocess
+        python_exe = sys.executable or "python"
+        cmd = [python_exe, script_path, url, "--provider", "guardoserie"]
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        output = proc.stdout.strip()
+        if output:
+            # Output can contain log lines before JSON; extract last JSON block
+            json_str = output.strip().split('\n')[-1]
+            res = json.loads(json_str)
+            if res.get('status') == 'ok':
+                html = res.get('html', '')
+                cookies_list = res.get('cookies', [])
+                if cookies_list:
+                    cached_cookies = {c['name']: c['value'] for c in cookies_list if c and 'name' in c}
+                    cached_user_agent = res.get('userAgent', '')
+                    save_cookie_cache()
+                if not is_cloudflare_challenge(html):
+                    log(f'[Guardoserie] cf_bypass success: len={len(html)}')
                     return html
                 else:
-                    log(f'[Guardoserie] Direct fetch on attempt {attempt} failed or got challenge: status={status} len={len(html) if html else 0}')
-            except Exception as e:
-                if "timed out" in str(e).lower() or "timeout" in str(e).lower():
-                    log(f'[Guardoserie] Direct fetch attempt {attempt} timed out (expected Cloudflare block)')
-                else:
-                    log(f'[Guardoserie] Direct fetch attempt {attempt} failed: {e}')
+                    log('[Guardoserie] cf_bypass returned challenge page')
+            else:
+                log(f"[Guardoserie] cf_bypass error: {res.get('message')}")
+        else:
+            log(f"[Guardoserie] cf_bypass no output, stderr: {proc.stderr}")
+    except Exception as e:
+        log(f"[Guardoserie] cf_bypass failed: {e}")
+    return ""
 
-        # 2. Fallback: Fetch via FlareSolverr to solve challenge and get new cookies
-        log(f'[Guardoserie] Fetch via FlareSolverr: {url}')
-        try:
-            req_url = f"{FLARESOLVERR_URL.rstrip('/')}/v1"
-            data = {
-                "cmd": "request.get",
-                "url": url,
-                "maxTimeout": 80000
-            }
-            req = urllib.request.Request(
-                req_url,
-                data=json.dumps(data).encode('utf-8'),
-                headers={'Content-Type': 'application/json'},
-                method='POST'
-            )
-            with urllib.request.urlopen(req, timeout=85) as response:
-                resp_data = json.loads(response.read().decode('utf-8'))
-                
-                is_success = resp_data.get('status') == 'ok'
-                solution = resp_data.get('solution', {})
-                html = solution.get('response', '')
-                status_code = solution.get('status', 200)
+def fetch_page(url):
+    for attempt in range(1, 4):
+        log(f'[Guardoserie] Fetch attempt {attempt} for: {url}')
+        bypass_html = fetch_via_cf_bypass(url)
+        if bypass_html and not is_cloudflare_challenge(bypass_html):
+            return bypass_html
 
-                if is_success:
-                    # Cache the updated cookies and User-Agent from FlareSolverr solution
-                    cookies_list = solution.get('cookies', [])
-                    if cookies_list:
-                        cached_cookies = {c['name']: c['value'] for c in cookies_list}
-                        cached_user_agent = solution.get('userAgent', '')
-                        log(f'[Guardoserie] Cookie cache updated with {len(cached_cookies)} cookies')
-                        save_cookie_cache()
-                    
-                    if not is_cloudflare_challenge(html):
-                        log(f'[Guardoserie] FlareSolverr success on attempt {attempt}: status={status_code} len={len(html)}')
-                        return html
-                    else:
-                        log(f'[Guardoserie] FlareSolverr on attempt {attempt} returned challenge page: len={len(html)}')
-                else:
-                    log(f"[Guardoserie] FlareSolverr error response: {resp_data}")
-        except Exception as e:
-            log(f"[Guardoserie] FlareSolverr request failed on attempt {attempt}: {e}")
-        
-        # If we got a challenge or failed, wait 2.5 seconds before retrying
         if attempt < 3:
             log('[Guardoserie] Waiting 2.5 seconds before retry...')
             time.sleep(2.5)
