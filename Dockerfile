@@ -1,9 +1,12 @@
 FROM node:22-bookworm-slim
 
-# Install system dependencies for Python, Playwright/Firefox and Xvfb
+# Install system dependencies for Python, Playwright/Firefox, Xvfb and Cloudflare Warp dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     curl \
+    git \
+    iproute2 \
+    iptables \
     python3 \
     python3-pip \
     xvfb \
@@ -24,6 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libasound2 \
     libpango-1.0-0 \
     libcairo2 \
+    gnupg2 \
+    lsb-release \
     libgl1 \
     libglib2.0-0 \
     libfontconfig1 \
@@ -35,7 +40,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fluxbox \
     && rm -rf /var/lib/apt/lists/*
 
+# Prefer IPv4 when both A and AAAA records are available.
+RUN printf 'precedence ::ffff:0:0/96  100\n' >> /etc/gai.conf
+
+# Install Cloudflare Warp
+RUN curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor --output /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg && \
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/cloudflare-client.list && \
+    apt-get update && apt-get install -y cloudflare-warp && \
+    rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
+
+# Environment Settings
+ENV NODE_ENV=production
+ENV IN_DOCKER=true
+ENV NODE_OPTIONS=--dns-result-order=ipv4first
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt ./
@@ -51,8 +70,11 @@ RUN npm install --omit=dev
 # Copy application source code
 COPY . .
 
+# Ensure entrypoint is executable
+RUN chmod +x entrypoint.sh
+
 # Expose the port the app runs on
 EXPOSE 7171
 
-# Start the application
-CMD ["npm", "start"]
+# Start the application using entrypoint.sh (starts warp-svc and connects before node app)
+CMD ["./entrypoint.sh"]
