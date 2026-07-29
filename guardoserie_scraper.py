@@ -62,13 +62,69 @@ def is_cloudflare_challenge(html):
             'in attesa della risposta' in html_lower or
             'enable javascript and cookies to continue' in html_lower)
 
+_browser_context = None
+_playwright_instance = None
+
+def get_browser_context():
+    global _browser_context, _playwright_instance
+    if _browser_context is None:
+        try:
+            from playwright.sync_api import sync_playwright
+            from camoufox.utils import launch_options as _cf_lo
+            import tempfile
+            log('[Guardoserie] Inizializzazione istanza in-memory Camoufox...')
+            _playwright_instance = sync_playwright().start()
+            td = os.path.join(tempfile.gettempdir(), "camoufox_ctx_guardoserie")
+            os.makedirs(td, exist_ok=True)
+            _browser_context = _playwright_instance.firefox.launch_persistent_context(
+                td, no_viewport=True, **_cf_lo(headless=True, locale="it-IT", geoip=True)
+            )
+            log('[Guardoserie] Istanza Camoufox in-memory pronta.')
+        except Exception as e:
+            log(f'[Guardoserie] Errore inizializzazione Camoufox in-memory: {e}')
+            _browser_context = None
+    return _browser_context
+
 CF_BYPASS_SCRIPT = os.environ.get(
     'CF_BYPASS_SCRIPT',
     os.path.join(os.path.dirname(__file__), "cf_bypass.py")
 )
 
+def safe_title(p):
+    try: return p.title()
+    except: return ""
+
 def fetch_via_cf_bypass(url):
     global cached_cookies, cached_user_agent
+    
+    # 1. Try fast in-memory browser context
+    ctx = get_browser_context()
+    if ctx:
+        try:
+            log(f'[Guardoserie] Fast in-memory fetch: {url}')
+            page = ctx.new_page()
+            try:
+                page.set_default_timeout(30000)
+                page.goto(url, wait_until='domcontentloaded')
+                for _ in range(12):
+                    t = safe_title(page)
+                    if not is_cloudflare_challenge(t):
+                        break
+                    time.sleep(1)
+                try:
+                    page.wait_for_load_state('domcontentloaded', timeout=3000)
+                except Exception:
+                    pass
+                html = page.content()
+                if not is_cloudflare_challenge(html):
+                    log(f'[Guardoserie] Fast in-memory fetch success: len={len(html)}')
+                    return html
+            finally:
+                page.close()
+        except Exception as e:
+            log(f'[Guardoserie] Fast in-memory fetch failed: {e}')
+
+    # 2. Fallback to subprocess script
     script_path = CF_BYPASS_SCRIPT
     if not os.path.exists(script_path):
         script_path = os.path.join(os.path.dirname(__file__), "cf_bypass.py")
@@ -76,7 +132,7 @@ def fetch_via_cf_bypass(url):
         log(f'[Guardoserie] cf_bypass script not found at {script_path}')
         return ""
 
-    log(f'[Guardoserie] Fetching via cf_bypass (Camoufox): {url}')
+    log(f'[Guardoserie] Fetching via subprocess cf_bypass: {url}')
     try:
         import subprocess
         python_exe = sys.executable or "python"
@@ -84,7 +140,6 @@ def fetch_via_cf_bypass(url):
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         output = proc.stdout.strip()
         if output:
-            # Output can contain log lines before JSON; extract last JSON block
             json_str = output.strip().split('\n')[-1]
             res = json.loads(json_str)
             if res.get('status') == 'ok':
@@ -95,16 +150,16 @@ def fetch_via_cf_bypass(url):
                     cached_user_agent = res.get('userAgent', '')
                     save_cookie_cache()
                 if not is_cloudflare_challenge(html):
-                    log(f'[Guardoserie] cf_bypass success: len={len(html)}')
+                    log(f'[Guardoserie] Subprocess cf_bypass success: len={len(html)}')
                     return html
                 else:
-                    log('[Guardoserie] cf_bypass returned challenge page')
+                    log('[Guardoserie] Subprocess cf_bypass returned challenge page')
             else:
-                log(f"[Guardoserie] cf_bypass error: {res.get('message')}")
+                log(f"[Guardoserie] Subprocess cf_bypass error: {res.get('message')}")
         else:
-            log(f"[Guardoserie] cf_bypass no output, stderr: {proc.stderr}")
+            log(f"[Guardoserie] Subprocess cf_bypass no output, stderr: {proc.stderr}")
     except Exception as e:
-        log(f"[Guardoserie] cf_bypass failed: {e}")
+        log(f"[Guardoserie] Subprocess cf_bypass failed: {e}")
     return ""
 
 def fetch_page(url):
@@ -209,7 +264,23 @@ def cmd_episode(url):
     html = fetch_page(url)
     return parse_episode(html)
 
+import atexit
+
+def cleanup_browser():
+    global _browser_context, _playwright_instance
+    if _browser_context:
+        try: _browser_context.close()
+        except Exception: pass
+        _browser_context = None
+    if _playwright_instance:
+        try: _playwright_instance.stop()
+        except Exception: pass
+        _playwright_instance = None
+
+atexit.register(cleanup_browser)
+
 def cmd_close():
+    cleanup_browser()
     return {'ok': True}
 
 if __name__ == '__main__':
